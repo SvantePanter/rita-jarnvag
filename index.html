@@ -272,7 +272,8 @@ var state = {
   vald: null,
   visaHornlinje: true,
   visaKorridor: true,
-  visaGrund: { lu: true, natur: true, ritade: true }   // grunddatans lager
+  visaGrund: { lu: true, natur: true, ritade: true },   // grunddatans lager
+  grundVisad: false                 // har kartan visat grunddatan en gång
 };
 var senaste = null;                     // aktiv sidas beräkning (tabeller, export)
 var senasteSidor = { vanster: null, hoger: null };
@@ -1214,7 +1215,12 @@ function hamtaGrund() {
     grund.fel = fel.length ? fel.join("; ") : null;
     grund.hamtad = new Date();
     visaGrundStatus();
+    // Underlaget ska upp i kartan direkt när det är hämtat. Det här anropet
+    // saknades först: panelen visade "21 objekt" medan kartan var tom, eftersom
+    // kontrollen (som ritar underlaget) bara körs när korridoren är sluten.
+    ritaGrund();
     rita();                       // ritningen och kontrollen räknas om
+    visaUtGrundOmIngetSyns();
   }
   kvar.slice().forEach(function (k) {
     agolFraga(k, t).then(function (rader) {
@@ -1357,6 +1363,35 @@ function raknaGrundKontroll() {
 function objektNamn(o) {
   var n = (o.namn === null || o.namn === undefined ? "" : String(o.namn)).trim();
   return n || ("#" + o.id);
+}
+
+/* Grunddatan ligger i Göteborg–Borås-trakten. Är kartan någon annanstans ser det
+ * ut som att hämtningen misslyckades — panelen säger "21 objekt" och kartan är
+ * tom. Visa den då. Sker en gång per omgång, så att en omhämtning inte rycker
+ * kartan från det man håller på med. */
+function visaUtGrundOmIngetSyns() {
+  if (state.grundVisad) return;
+  var b = grundBox();
+  if (!b) return;
+  if (karta.getBounds().intersects(b)) { state.grundVisad = true; return; }
+  karta.fitBounds(b.pad(0.02));
+  state.grundVisad = true;
+}
+
+/* Utsträckningen för det som hämtats, i lat/lng (LU-korridoren är den som
+ * beskriver var uppdraget ligger). */
+function grundBox() {
+  var b = null;
+  grund.lu.forEach(function (o) {
+    o.ringar.forEach(function (r) {
+      r.forEach(function (p) {
+        var w = Geom.tillWgs84(p[0], p[1]);
+        if (!b) b = L.latLngBounds([[w.lat, w.lon], [w.lat, w.lon]]);
+        else b.extend([w.lat, w.lon]);
+      });
+    });
+  });
+  return b;
 }
 
 function talArea(m2) {

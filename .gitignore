@@ -7,3 +7,5 @@ __pycache__/
 .pytest_cache/
 # uttag av de riktiga lagren (inte publik grunddata)
 grund_uttag.json
+token.txt
+grund_uttag.json
