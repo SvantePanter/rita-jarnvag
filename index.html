@@ -177,6 +177,7 @@ var lager = {
 };
 var gummi = null;                   // gummiband i rita-läget
 var nodmarken = [];                 // markörer per nod (för drag)
+var drar = false;                   // pågående noddrag: rör inte markörerna då
 
 /* --- hjälpare --- */
 function tillSwerefLista() {
@@ -281,7 +282,11 @@ function rakna() {
 function rita() {
   senaste = rakna();
   lager.hornlinje.clearLayers(); lager.rak.clearLayers(); lager.bage.clearLayers();
-  lager.kort.clearLayers(); lager.noder.clearLayers(); lager.marken.clearLayers();
+  lager.kort.clearLayers(); lager.marken.clearLayers();
+  // Nodmarkörerna rörs inte mitt i ett drag: tar man bort den markör som
+  // fingret håller i, avbryter Leaflet draget — noden "snäpper" tillbaka och
+  // går bara att flytta några meter.
+  if (!drar) lager.noder.clearLayers();
 
   // hörnlinjen: det användaren ritade, orörd
   if (state.visaHornlinje && senaste.sw.length > 1) {
@@ -309,6 +314,7 @@ function rita() {
 
   // markörer: noder, radieetiketter, varningsmärken
   state.noder.forEach(function (p, i) {
+    if (drar) return;                 // den dragna markören lever vidare (se ovan)
     var vald = state.vald === i ? " vald" : "";
     var m = L.marker([p.lat, p.lng], {
       draggable: state.lage === "redigera",
@@ -318,9 +324,17 @@ function rita() {
       zIndexOffset: 400
     }).addTo(lager.noder);
     m.on("click", function (e) { L.DomEvent.stopPropagation(e); state.vald = i; rita(); });
+    m.on("dragstart", function () { drar = true; });
     m.on("drag", function (e) {
       var ll = e.target.getLatLng();
       state.noder[i] = { lat: ll.lat, lng: ll.lng };
+      rita();                          // geometrin följer med, markörerna står still
+    });
+    m.on("dragend", function (e) {
+      var ll = e.target.getLatLng();
+      state.noder[i] = { lat: ll.lat, lng: ll.lng };
+      drar = false;
+      state.vald = i;
       rita();
     });
     nodmarken[i] = m;
