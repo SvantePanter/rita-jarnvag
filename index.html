@@ -205,7 +205,8 @@
       </div>
       <div class="hjalp" id="grundHjalp">Grunddatan ligger i Tyréns portal och kräver
         inloggning. Geometrin hämtas i SWEREF 99 TM — samma plan som korridoren räknas i.
-        Naturvärde ritas efter klass: 1 röd, 2 orange, 3 gul, 4 grå.</div>
+        Naturvärde ritas efter klass: 1 röd, 2 orange, 3 gul, 4 grå. Underlaget går
+        att klicka rakt igenom — siffrorna står i kontrollen nedan, inte i kartan.</div>
       <div class="grKontroll" id="grundKontroll"></div>
     </div>
 
@@ -1257,12 +1258,18 @@ function visaGrundStatus() {
 /* Ett objekt läggs i kartan som sina polygoner: en yttre ring med sina hål.
  * Ringarna kommer från Esri och grupperas av Geom.esriTillPolygoner (yttre ring
  * medurs, hål moturs) — ritade man varje ring för sig blev hålen fyllda. */
-function laggPolygon(ringar, stil, tooltip) {
+function laggPolygon(ringar, stil) {
   var polygoner = Geom.esriTillPolygoner(ringar);
   if (!polygoner.length) return 0;
   polygoner.forEach(function (poly) {
-    L.polygon(poly.map(function (r) { return tillLatLngLista(ringTillPunkter(r)); }), stil)
-      .addTo(lager.grund).bindTooltip(tooltip, { sticky: true });
+    // interactive: false — grunddatan är bara ett underlag. Bind ingen tooltip
+    // och ta inte emot klick: annars fångar polygonerna klicken och markerar sig
+    // i stället för att lämna dem vidare till ritandet.
+    var st = {};
+    for (var k in stil) st[k] = stil[k];
+    st.interactive = false;
+    L.polygon(poly.map(function (r) { return tillLatLngLista(ringTillPunkter(r)); }), st)
+      .addTo(lager.grund);
   });
   return polygoner.length;
 }
@@ -1275,9 +1282,7 @@ function ritaGrund() {
   if (state.visaGrund.lu) {
     grund.lu.forEach(function (o) {
       laggPolygon(o.ringar, { pane: "grundYta", color: "#c9a227", weight: 1.4, opacity: .8,
-        fillColor: "#c9a227", fillOpacity: .06 },
-        "LU-korridoren" + (o.namn ? ": " + o.namn : "") +
-        " — korridoren måste hålla sig inom den här");
+        fillColor: "#c9a227", fillOpacity: .06 });
     });
   }
   if (state.visaGrund.natur) {
@@ -1287,8 +1292,7 @@ function ritaGrund() {
   if (state.visaGrund.ritade) {
     grund.ritade.forEach(function (o) {
       laggPolygon(o.ringar, { pane: "grundYta", color: "#9d7bff", weight: 1.6, dashArray: "7 5",
-        opacity: .85, fillColor: "#9d7bff", fillOpacity: .07 },
-        "Redan ritad korridor" + (o.namn ? ": " + o.namn : ""));
+        opacity: .85, fillColor: "#9d7bff", fillOpacity: .07 });
     });
   }
   ritaGrundKontroll();
@@ -1301,9 +1305,7 @@ function ritaNaturObjekt(o, berord) {
   var traffad = !!(berord && berord[String(o.id)]);
   laggPolygon(o.ringar, { pane: "grundYta", color: f, weight: traffad ? 3 : 1.4,
     opacity: traffad ? .95 : .7, fillColor: f,
-    fillOpacity: o.klass === "1" ? .22 : .12 },
-    "Naturvärde klass " + (o.klass || "?") + (o.namn && String(o.namn).trim() ? " · " + String(o.namn).trim() : " · #" + o.id) +
-    (traffad ? " · i korridoren: " + talArea(berord[String(o.id)]) : ""));
+    fillOpacity: o.klass === "1" ? .22 : .12 });
 }
 
 /* Objekten som korridoren snittar, ur senaste kontrollen. */
