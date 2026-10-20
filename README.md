@@ -111,6 +111,29 @@ ringen är en giltig och moturs polygon, och varje breddmätning som
 `LineString.distance` mot andra sidan. JS och shapely är alltså två oberoende
 räkningar av samma sak, på samma sätt som projektionen prövas mot pyproj.
 
+## Importera en GeoJSON
+
+Knappen **Importera GeoJSON** i panel 1 läser en fil med en linje per sida. Fältet
+`sida` ska vara `vänster` eller `höger` (engelska `left`/`right` går också):
+
+```json
+{ "type": "Feature", "properties": { "sida": "vänster" },
+  "geometry": { "type": "LineString", "coordinates": [[11.96, 57.70], [11.99, 57.705]] } }
+```
+
+Appens egen export har mer med: `hornlinje` (noderna, orörd — den väljs framför
+`fardig_linje`, som redan är rundad) och `nod` med `R_m` per hörn, vilket ger
+tillbaka vilka hörn som har radie. Också radiekravet och breddgränserna följer
+med ur filens egenskaper, och har filen en korridoryta sluts korridoren direkt.
+
+Koordinaterna läses som WGS84 (RFC 7946). Ser talen ut som SWEREF 99 TM (meter,
+hundratusental) räknas de om, och hamnar de utanför Sverige kommer ett besked om
+att filen kan vara i SWEREF 99 12 00 (EPSG:3007) i stället — det är 17 mil fel.
+
+Själva läsningen är `Geom.lasGeoJsonSidor(text)` i `geom.js`: en ren funktion
+utan DOM och karta, prövad i `prov/test_import.py` mot appens egna utfil (noderna
+ska hamna inom några tiondels millimeter av filens egna E/N) och mot shapely.
+
 ## Grunddata (ArcGIS Online)
 
 Grunddatan ligger i Tyréns portal och **kräver inloggning**. Tre lager används:

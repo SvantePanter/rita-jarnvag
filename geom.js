@@ -920,7 +920,138 @@
     return ut;
   }
 
+  /* ---------- import: en GeoJSON med korridorens två sidor ----------
+   *
+   * Läser en fil och plockar ut vänster- och högersidan ur fältet "sida".
+   * Egna exporter har "hornlinje" (den ritade hörnlinjen) och "nod" (radien
+   * per hörn): de ger en exakt återresa. En handskriven fil kan nöja sig med
+   * två LineString märkta "vänster" och "höger".
+   *
+   * Ren funktion: ingen DOM, ingen karta — den går att pröva i node. */
+
+  /* Text i fältet "sida" → vår sidas namn. Svenska och engelska. */
+  function sidaAvText(t) {
+    var s = String(t === undefined || t === null ? "" : t).trim().toLowerCase();
+    if (s === "vanster" || s === "vänster" || s === "left" || s === "v") return "vanster";
+    if (s === "hoger" || s === "höger" || s === "right" || s === "h" || s === "o") return "hoger";
+    return null;
+  }
+
+  /* Position ur en GeoJSON-fil → lat/lng.
+   *
+   * RFC 7946 säger WGS84 (lng, lat), och så skriver vi själva. Men en fil kan
+   * komma från något som lagt SWEREF 99 TM i geometrin, och siffrorna avgör:
+   * grader är små tal, SWEREF är hundratusentals meter. */
+  function latLngAvPosition(c) {
+    if (!c || c.length < 2) return null;
+    var x = Number(c[0]), y = Number(c[1]);
+    if (!isFinite(x) || !isFinite(y)) return null;
+    if (Math.abs(x) <= 180 && Math.abs(y) <= 90) return { lat: y, lng: x, koordinat: "wgs84" };
+    var w = tillWgs84(x, y);
+    return { lat: w.lat, lng: w.lon, koordinat: "sweref" };
+  }
+
+  /* Inom Sveriges ungefärliga utsträckning? En fil i SWEREF 99 12 00 läst som
+   * 3006 hamnar i Nordsjön — det ska ge ett besked, inte en tyst tom karta. */
+  function inomSverige(lat, lon) {
+    return lat > 54.5 && lat < 69.5 && lon > 9.5 && lon < 24.5;
+  }
+
+  function lasGeoJsonSidor(text) {
+    var d = typeof text === "string" ? JSON.parse(text) : text;
+    var funktioner = [];
+    if (d && d.type === "FeatureCollection" && Array.isArray(d.features)) funktioner = d.features;
+    else if (d && d.type === "Feature") funktioner = [d];
+    else if (d && d.type) funktioner = [{ type: "Feature", properties: {}, geometry: d }];
+    else throw new Error("filen är ingen GeoJSON (type saknas)");
+
+    var per = { vanster: [], hoger: [] }, nodrader = { vanster: [], hoger: [] };
+    var antal = {}, utanSida = 0, forbigangna = 0, harKorridor = false, R = null;
+    funktioner.forEach(function (f) {
+      var p = (f && f.properties) || {}, g = (f && f.geometry) || {};
+      var namn = p.namn === undefined || p.namn === null ? "" : String(p.namn);
+      antal[namn || "(namn saknas)"] = (antal[namn || "(namn saknas)"] || 0) + 1;
+      if (typeof p.R_krav_m === "number" && R === null) R = p.R_krav_m;
+      if (namn === "korridor") { harKorridor = true; return; }      // ytan räknas om ur sidorna
+      var sida = sidaAvText(p.sida);
+      if (namn === "nod") { if (sida) nodrader[sida].push({ nr: p.nr, R: p.R_m }); return; }
+      if (!sida) {
+        if (g.type === "LineString" || g.type === "MultiLineString") utanSida++;
+        return;
+      }
+      if (g.type === "LineString") per[sida].push({ namn: namn, punkter: g.coordinates });
+      else if (g.type === "MultiLineString") {
+        (g.coordinates || []).forEach(function (c) { per[sida].push({ namn: namn, punkter: c }); });
+      } else forbigangna++;
+    });
+
+    var ut = { sidor: { vanster: [], hoger: [] }, aktiva: { vanster: [], hoger: [] },
+      R: R, bredd: null, sluten: false, koordinat: null, rader: [], varningar: [],
+      antal_funktioner: funktioner.length, antal_per_namn: antal };
+
+    ["vanster", "hoger"].forEach(function (namn) {
+      var lista = per[namn];
+      if (!lista.length) {
+        ut.varningar.push("Ingen " + (namn === "vanster" ? "vänstersida" : "högersida") +
+          " hittades — fältet \"sida\" ska vara \"" + (namn === "vanster" ? "vänster" : "höger") + "\".");
+        return;
+      }
+      // Hörnlinjen först: den är noderna. Är den borta går den färdiga linjen att
+      // läsa, men då är den redan rundad och hörnen hamnar där kurvorna möts.
+      var vald = null, slag = "";
+      lista.forEach(function (l) { if (!vald && l.namn === "hornlinje") { vald = l; slag = "hörnlinjen"; } });
+      if (!vald) lista.forEach(function (l) {
+        if (!vald && l.namn === "fardig_linje") { vald = l; slag = "den färdiga linjen — redan rundad, så hörnen hamnar där kurvorna möts"; }
+      });
+      if (!vald) {
+        vald = lista.slice().sort(function (a, b) { return b.punkter.length - a.punkter.length; })[0];
+        slag = "linjen " + (vald.namn || "(utan namn)");
+      }
+      var punkter = [];
+      vald.punkter.forEach(function (c) { var q = latLngAvPosition(c); if (q) punkter.push(q); });
+      ut.koordinat = ut.koordinat || (punkter[0] && punkter[0].koordinat) || null;
+      var utanfor = punkter.filter(function (q) { return !inomSverige(q.lat, q.lng); }).length;
+      if (punkter.length && utanfor === punkter.length) {
+        ut.varningar.push((namn === "vanster" ? "Vänstersidan" : "Högersidan") +
+          " hamnar utanför Sverige — är filen i SWEREF 99 12 00 (EPSG:3007) i stället för 99 TM (3006)?");
+      }
+      if (punkter.length < 2) {
+        ut.varningar.push((namn === "vanster" ? "Vänstersidan" : "Högersidan") + " har färre än två punkter.");
+        return;
+      }
+      ut.sidor[namn] = punkter.map(function (q) { return { lat: q.lat, lng: q.lng }; });
+      var rad = nodrader[namn];
+      ut.aktiva[namn] = punkter.map(function (q, i) {
+        if (i === 0 || i === punkter.length - 1) return false;      // ändarna är inga hörn
+        if (rad.length) {
+          var n = null;
+          rad.forEach(function (x) { if (n === null && Number(x.nr) === i + 1) n = x; });
+          return !!(n && typeof n.R === "number");                  // R_m = null: hörnet hade ingen radie
+        }
+        return true;                                               // handskriven fil: alla hörn får radie
+      });
+      var medRadie = ut.aktiva[namn].filter(function (a) { return a; }).length;
+      ut.rader.push((namn === "vanster" ? "Vänster" : "Höger") + ": " + punkter.length +
+        " noder ur " + slag + (medRadie ? ", " + medRadie + " hörn med radie" : ", inga hörn med radie"));
+    });
+
+    // Ytan och gränserna ligger i filens egna egenskaper (vår export skriver dem).
+    var meta = (d && d.properties) || {};
+    if (Array.isArray(meta.breddgranser_m) && meta.breddgranser_m.length === 2) {
+      ut.bredd = [Number(meta.breddgranser_m[0]), Number(meta.breddgranser_m[1])];
+    }
+    if (ut.R === null && typeof meta.R_krav_m === "number") ut.R = meta.R_krav_m;
+    ut.sluten = meta.korridoren_sluten === true || harKorridor;
+    if (utanSida) ut.varningar.push(utanSida + " linje" + (utanSida === 1 ? "" : "r") +
+      " saknade fältet \"sida\" och lästes inte.");
+    if (forbigangna) ut.varningar.push(forbigangna + " geometri" + (forbigangna === 1 ? "" : "er") +
+      " av annat slag än linje lästes inte.");
+    return ut;
+  }
+
   return {
+    /* import av en GeoJSON med korridorens sidor */
+    lasGeoJsonSidor: lasGeoJsonSidor, sidaAvText: sidaAvText,
     tillSweref: tillSweref,
     tillWgs84: tillWgs84,
     avstand: avstand,

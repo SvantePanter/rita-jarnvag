@@ -72,6 +72,10 @@
     box-shadow: 0 0 0 2px rgba(255,141,122,.5), 0 1px 4px rgba(0,0,0,.5); }
   .sidaKnapp { display: flex; gap: 6px; }
   .sidaKnapp button { flex: 1; }
+  .filknapp { background: var(--kort2); color: var(--text); border: 1px solid var(--linje);
+    border-radius: 7px; padding: 6px 9px; font-size: 13px; cursor: pointer; }
+  .filknapp:hover { border-color: var(--teal); }
+  #importFil { display: none; }
   .kort.vanster { border-left: 3px solid var(--teal); }
   .kort.hoger { border-left: 3px solid var(--bla); }
   .kort.korridor { border-left: 3px solid #8fd7ff; }
@@ -115,6 +119,13 @@
         <button id="exempel">Exempel</button>
         <button id="rensa" class="fara">Rensa</button>
       </div>
+      <div class="rad" style="margin-top:8px">
+        <label class="filknapp" for="importFil">Importera GeoJSON</label>
+        <input type="file" id="importFil" accept=".geojson,.json,application/geo+json,application/json">
+      </div>
+      <div class="hjalp" id="importHjalp">En linje per sida: fältet <b>sida</b> ska vara
+        <b>vänster</b> eller <b>höger</b>. Vår egen export har hörnlinjen och radien per
+        hörn med, så en sådan fil kommer tillbaka precis som den var.</div>
       <div class="hjalp" id="lageHjalp"></div>
       <div class="hjalp">Du ritar en sida i taget. <b>Sidan du ritar i</b> är den som
         klick och nodflyttningar gäller; den andra ligger kvar dämpad. Ritas båda
@@ -1512,6 +1523,67 @@ function laddaGrundFranFil() {
   });
 }
 
+/* --- import: en GeoJSON med korridorens sidor ------------------------------
+ *
+ * Filen ska ha en linje per sida, med fältet "sida" satt till "vänster" eller
+ * "höger". Vår egen export har både hörnlinjen (noderna) och radien per hörn,
+ * så en sådan fil kommer tillbaka som den var. Själva läsningen ligger i
+ * geom.js (Geom.lasGeoJsonSidor) och prövas i node — här kopplas bara
+ * tillståndet och kartan på.
+ */
+function sattImportStatus(text, klass) {
+  var el = document.getElementById("importHjalp");
+  el.className = "hjalp " + (klass || "");
+  el.textContent = text;
+}
+
+function importeraGeoJson(text) {
+  var ut;
+  try {
+    ut = Geom.lasGeoJsonSidor(text);
+  } catch (e) {
+    sattImportStatus("Kunde inte läsa filen: " + e.message, "varn");
+    return null;
+  }
+  var nv = ut.sidor.vanster.length, nh = ut.sidor.hoger.length;
+  if (!nv && !nh) {
+    sattImportStatus("Hittade inga sidor i filen. Funktionen letar efter linjer med " +
+      "fältet \"sida\" = \"vänster\" eller \"höger\".", "varn");
+    return null;
+  }
+  rensa();
+  ["vanster", "hoger"].forEach(function (namn) {
+    state.sidor[namn].noder = ut.sidor[namn];
+    state.sidor[namn].aktiva = ut.aktiva[namn];
+  });
+  if (ut.R) {
+    state.R = Math.max(GOLV, ut.R);
+    document.getElementById("radieFalt").value = state.R;
+  }
+  if (ut.bredd) {
+    state.breddMin = Math.max(1, ut.bredd[0]);
+    state.breddMax = Math.max(1, ut.bredd[1]);
+    document.getElementById("breddMinFalt").value = state.breddMin;
+    document.getElementById("breddMaxFalt").value = state.breddMax;
+  }
+  state.korridorenSluten = !!ut.sluten;
+  sattSida(nh && !nv ? "hoger" : "vanster");
+  rita();
+  planeraGrundKontroll();
+
+  var delar = ut.rader.slice();
+  delar.push(ut.sluten ? "korridoren är sluten"
+    : "korridoren är öppen — slut den när du är nöjd");
+  if (ut.koordinat === "sweref") delar.push("läst i SWEREF 99 TM");
+  if (ut.antal_per_namn && ut.antal_per_namn.korridor) delar.push("ytan räknas om ur sidorna");
+  if (ut.varningar.length) {
+    sattImportStatus(delar.join(" · ") + " — " + ut.varningar.join(" "), "varn");
+  } else {
+    sattImportStatus(delar.join(" · "), "ok");
+  }
+  return ut;
+}
+
 /* --- händelser --- */
 karta.on("click", function (e) {
   if (state.lage !== "rita") return;
@@ -1595,6 +1667,17 @@ document.getElementById("hamtaGrund").onclick = hamtaGrund;
 });
 document.getElementById("visaNatur34").onchange = ritaGrund;
 
+/* importen */
+document.getElementById("importFil").onchange = function () {
+  var f = this.files && this.files[0];
+  this.value = "";                       // så att samma fil kan väljas igen
+  if (!f) return;
+  var las = new FileReader();
+  las.onload = function () { importeraGeoJson(String(las.result)); };
+  las.onerror = function () { sattImportStatus("Kunde inte läsa filen " + f.name, "varn"); };
+  las.readAsText(f);
+};
+
 /* --- start --- */
 state.noder = state.sidor.vanster.noder;      // aliasen pekar på vänstersidan
 state.aktiva = state.sidor.vanster.aktiva;
@@ -1644,7 +1727,9 @@ window.__app = {
   lasTokenUrAdress: lasTokenUrAdress, visaInloggning: visaInloggning,
   /* sätt en token direkt (probehjälp — token skrivs aldrig ut) */
   sparaToken: sparaToken, glomToken: glomToken,
-  harToken: function () { return !!token(); }
+  harToken: function () { return !!token(); },
+  /* importen */
+  importeraGeoJson: importeraGeoJson, lasGeoJsonSidor: function (t) { return Geom.lasGeoJsonSidor(t); }
 };
 </script>
 </body>
