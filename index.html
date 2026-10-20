@@ -151,6 +151,10 @@
       </div>
       <div class="hjalp">Högersidan läggs till höger om färdriktningen, mätt
         vinkelrätt, med miterskarv i hörnen.</div>
+      <div class="rad" style="margin-top:8px">
+        <button id="slutKorridor">Slut korridoren av båda sidorna</button>
+      </div>
+      <div class="hjalp" id="slutHjalp"></div>
       <div style="margin-top:8px">
         <div class="stat"><span>Vänster sida</span><b id="kLangdV">–</b></div>
         <div class="stat"><span>Höger sida</span><b id="kLangdH">–</b></div>
@@ -219,7 +223,8 @@ var state = {
   sida: "vanster",                      // sidan som ritas och redigeras just nu
   noder: [], aktiva: [],                // alias för den sidan, se sattSida()
   R: R_STD,
-  breddMin: 30, breddMax: 400,          // korridorens breddgränser (m)
+  breddMin: 30, breddMax: 400,      // korridorens breddgränser (m)
+  korridorenSluten: false,          // korridoren sluts först på kommando
   lage: "rita",
   vald: null,
   visaHornlinje: true,
@@ -477,8 +482,12 @@ function rita() {
   senasteSidor.vanster = raknaSida("vanster");
   senasteSidor.hoger = raknaSida("hoger");
   senaste = senasteSidor[state.sida];
-  korridoren = Geom.korridor(senasteSidor.vanster.fardig, senasteSidor.hoger.fardig,
-    { breddMin: state.breddMin, breddMax: state.breddMax, steg: 25 });
+  // Korridoren sluts först på kommando. Byggdes den så snart båda sidorna hade
+  // två noder blev polygonen "färdig" mitt i ritandet av högersidan.
+  korridoren = state.korridorenSluten
+    ? Geom.korridor(senasteSidor.vanster.fardig, senasteSidor.hoger.fardig,
+        { breddMin: state.breddMin, breddMax: state.breddMax, steg: 25 })
+    : null;
 
   lager.korridor.clearLayers(); lager.forbindelse.clearLayers();
   lager.hornlinje.clearLayers(); lager.rak.clearLayers(); lager.bage.clearLayers();
@@ -532,6 +541,41 @@ function rita() {
   });
 
   ritaTabeller();
+}
+
+/* Slut/öppna-knappen och dess besked. Korridoren sluts av användaren, inte av
+ * att sidorna råkade få två noder. */
+function ritaSlutStatus() {
+  var kn = document.getElementById("slutKorridor");
+  var nv = state.sidor.vanster.noder.length, nh = state.sidor.hoger.noder.length;
+  kn.textContent = state.korridorenSluten ? "Öppna korridoren igen" : "Slut korridoren av båda sidorna";
+  var text;
+  if (state.korridorenSluten) {
+    text = "Korridoren är sluten: " + nv + " noder i vänstersidan, " + nh + " i högersidan. " +
+      "Ändringar räknas om direkt — öppna den igen om du vill rita vidare utan korridorens siffror.";
+  } else if (nv < 2 || nh < 2) {
+    text = "Korridoren är öppen. Båda sidorna behöver minst två noder: vänstersidan har " +
+      nv + ", högersidan " + nh + ".";
+  } else {
+    text = "Korridoren är öppen — polygonen ritas och mäts först när du sluter den. " +
+      "Vänstersidan har " + nv + " noder, högersidan " + nh + ".";
+  }
+  document.getElementById("slutHjalp").textContent = text;
+}
+
+function vaxlaKorridoren() {
+  if (!state.korridorenSluten) {
+    var nv = state.sidor.vanster.noder.length, nh = state.sidor.hoger.noder.length;
+    if (nv < 2 || nh < 2) {
+      sattStatus("Båda sidorna behöver minst två noder innan korridoren kan slutas " +
+        "(vänster " + nv + ", höger " + nh + ").", "varn");
+      return;
+    }
+    state.korridorenSluten = true;
+  } else {
+    state.korridorenSluten = false;
+  }
+  rita();
 }
 
 function ritaTabeller() {
@@ -627,6 +671,7 @@ function ritaTabeller() {
   document.getElementById("langdDiff").textContent = n > 1 ? tal(df - dh, 0) + " m" : "–";
 
   ritaKorridorTabell();
+  ritaSlutStatus();
 }
 
 /* Korridorens siffror. Bredden mäts vinkelrätt mot motståndarsidan var 25:e
@@ -639,9 +684,12 @@ function ritaKorridorTabell() {
   if (!k || !k.langd) {
     ["kLangdV", "kLangdH", "kLangdM", "kBreddMin", "kBreddMax", "kArea", "kAndar", "kRing"]
       .forEach(function (id) { satt(id, tom); });
-    document.getElementById("kHjalp").textContent =
-      "Korridoren ritas när båda sidorna har minst två noder. Högersidan kan göras " +
-      "av vänstersidan med förskjutningen ovan.";
+    var nv = state.sidor.vanster.noder.length, nh = state.sidor.hoger.noder.length;
+    document.getElementById("kHjalp").textContent = state.korridorenSluten
+      ? "Korridoren är sluten, men båda sidorna behöver minst två noder: vänstersidan har " +
+        nv + ", högersidan " + nh + "."
+      : "Ingen korridor är sluten. Rita båda sidorna och tryck på " +
+        "\"Slut korridoren av båda sidorna\" — först då ritas polygonen och mäts bredderna.";
     return;
   }
 
@@ -759,6 +807,7 @@ function rensa() {
     state.sidor[namn].aktiva = [];
   });
   state.vald = null;
+  state.korridorenSluten = false;
   sattStatus("");
   sattSida(state.sida);          // pekar om aliasen och ritar om
 }
@@ -793,6 +842,7 @@ function exempel() {
     sattRadiePaAlla();
   });
   state.vald = null;
+  state.korridorenSluten = true;      // exemplet är en färdig korridor
   sattSida("vanster");
   karta.fitBounds(L.latLngBounds(vanster.concat(hoger).map(function (p) { return [p.lat, p.lng]; })),
     { padding: [20, 20] });
@@ -817,8 +867,8 @@ function skapaHogerFranVanster() {
   hoger.aktiva = hoger.noder.map(function (_, i) { return !!v.aktiva[i]; });
   sattSida("hoger");
   sattStatus("Högersidan skapades " + tal(d, 0) + " m till höger om vänstersidan" +
-    (r.varningar.length ? " — " + r.varningar.join(" ") : "."),
-    r.varningar.length ? "varn" : "ok");
+    (r.varningar.length ? " — " + r.varningar.join(" ") : "") +
+    ". Slut korridoren när du är nöjd.", r.varningar.length ? "varn" : "ok");
 }
 
 /* --- export --- */
@@ -909,6 +959,7 @@ function byggGeoJson() {
       area_i_m2_km2_ha: "räknad som polygonarea i SWEREF 99 TM, inte geodetiskt",
       R_krav_m: state.R, breddgranser_m: [state.breddMin, state.breddMax],
       korridor_med: !!(k && k.ring),
+      korridoren_sluten: state.korridorenSluten,
       antal_varningar: allaVarningar.length, varningar: allaVarningar },
     features: funktioner };
 }
@@ -1022,6 +1073,7 @@ document.getElementById("rensa").onclick = rensa;
 document.getElementById("sattRadie").onclick = sattRadiePaAlla;
 document.getElementById("taBortRadier").onclick = taBortAllaRadier;
 document.getElementById("skapaHoger").onclick = skapaHogerFranVanster;
+document.getElementById("slutKorridor").onclick = vaxlaKorridoren;
 document.getElementById("radieFalt").onchange = function () {
   state.R = Math.max(GOLV, Number(this.value) || R_STD);
   this.value = state.R;
@@ -1075,7 +1127,7 @@ window.__app = {
   sattLage: sattLage, sattSida: sattSida,
   laggTillNod: laggTillNod, sattRadiePaAlla: sattRadiePaAlla, taBortAllaRadier: taBortAllaRadier,
   vaxlaRadie: vaxlaRadie, taBortNod: taBortNod, exempel: exempel, rensa: rensa,
-  skapaHogerFranVanster: skapaHogerFranVanster,
+  skapaHogerFranVanster: skapaHogerFranVanster, vaxlaKorridoren: vaxlaKorridoren,
   exporteraGeoJson: exporteraGeoJson, exporteraCsv: exporteraCsv, byggGeoJson: byggGeoJson,
   byggCsv: byggCsv, senaste: function () { return senaste; },
   senasteSidor: function () { return senasteSidor; },

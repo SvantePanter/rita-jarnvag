@@ -67,6 +67,12 @@ och ringen sluts: **vänster framlänges + höger baklänges**. Ritas högersida
 åt andra hållet upptäcks det och ändarna paras i stället **korsvis** — annars
 blev korridoren ett timglas.
 
+Ringen sluts **på kommando** (knappen *Slut korridoren av båda sidorna*).
+Byggdes den så snart båda sidorna hade två noder blev polygonen "färdig" mitt i
+ritandet av högersidan, och siffrorna och varningarna handlade om en halvfärdig
+korridor. Så länge korridoren är öppen ritas och mäts ingenting; knappen
+*Öppna korridoren igen* tar tillbaka den utan att röra noderna.
+
 ### Vad som kontrolleras, och varför
 
 - **Bredd**, mätt **vinkelrätt** mot motståndarsidan var 25:e meter (att mäta
