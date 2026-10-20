@@ -1,0 +1,25 @@
+# Render Blueprint för rita-jarnvag (statisk sajt).
+#
+# Tjänsten skapades via API:t, så den här filen gäller bara om den återskapas
+# som Blueprint. Formen är densamma: byggskriptet stämplar version och commit,
+# och _site/ publiceras.
+services:
+  - type: web
+    name: rita-jarnvag
+    runtime: static
+    repo: https://github.com/SvantePanter/rita-jarnvag
+    branch: main
+    autoDeploy: true
+    buildCommand: sh bygg.sh
+    staticPublishPath: ./_site
+    envVars:
+      - key: SKIP_INSTALL_DEPS
+        value: "true"
+    headers:
+      - path: /*
+        name: Cache-Control
+        value: no-cache
+    routes:
+      - type: rewrite
+        source: /health
+        destination: /helsa.json

@@ -1,0 +1,706 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rita-järnväg — raka segment och radier i 4950 m</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root {
+    --bak: #0b1220; --kort: #16233a; --kort2: #1d2d47; --linje: #2b3d5c;
+    --text: #e8eefc; --damp: #9db0d0; --teal: #3ddbb8; --amber: #ffc95c;
+    --rod: #ff8d7a; --bla: #6fb3ff;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bak); color: var(--text);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  #ram { display: flex; height: 100%; }
+  #panel { width: 358px; min-width: 358px; height: 100%; overflow-y: auto;
+    background: var(--bak); border-right: 1px solid var(--linje); padding: 12px 12px 40px; }
+  #karta { flex: 1; height: 100%; background: #0e1626; }
+  h1 { font-size: 17px; margin: 2px 0 2px; letter-spacing: .2px; }
+  h1 span { color: var(--teal); }
+  .bygg { color: var(--damp); font-size: 11px; margin-bottom: 10px; }
+  .kort { background: var(--kort); border: 1px solid var(--linje); border-radius: 10px;
+    padding: 10px; margin-bottom: 10px; }
+  .kort > h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em;
+    color: var(--damp); margin: 0 0 8px; font-weight: 600; }
+  .rad { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  button { background: var(--kort2); color: var(--text); border: 1px solid var(--linje);
+    border-radius: 7px; padding: 6px 9px; font-size: 13px; cursor: pointer; }
+  button:hover { border-color: var(--teal); }
+  button.pa { background: #14443c; border-color: var(--teal); color: #b9f6e7; }
+  button.fara:hover { border-color: var(--rod); color: #ffd6ce; }
+  input[type="number"] { width: 92px; background: #0d1728; color: var(--text);
+    border: 1px solid var(--linje); border-radius: 7px; padding: 6px 7px; font-size: 13px; }
+  input[type="checkbox"] { accent-color: var(--teal); }
+  label.iv { display: flex; gap: 6px; align-items: center; color: var(--damp); font-size: 13px; }
+  .hjalp { color: var(--damp); font-size: 12px; margin-top: 6px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { text-align: right; padding: 3px 4px; border-bottom: 1px solid #22304a; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--damp); font-weight: 500; }
+  .ok { color: var(--teal); } .varn { color: var(--amber); } .fel { color: var(--rod); }
+  td button { padding: 2px 6px; font-size: 11px; }
+  #varningar { font-size: 12.5px; }
+  #varningar .v { background: #3a2a12; border-left: 3px solid var(--amber);
+    border-radius: 4px; padding: 6px 8px; margin-bottom: 6px; color: #ffe6b8; }
+  #varningar .inget { color: var(--damp); }
+  .stat { display: flex; justify-content: space-between; font-size: 12.5px; padding: 2px 0; }
+  .stat b { font-weight: 600; }
+  .legend { background: rgba(11,18,32,.86); border: 1px solid var(--linje); border-radius: 8px;
+    padding: 7px 9px; font-size: 12px; color: var(--text); }
+  .legend i { display: inline-block; width: 18px; height: 4px; border-radius: 2px;
+    vertical-align: middle; margin-right: 6px; }
+  .nod { width: 22px; height: 22px; border-radius: 50%; background: #0d1728;
+    border: 2px solid var(--teal); color: var(--text); font-size: 11px; line-height: 18px;
+    text-align: center; font-weight: 600; }
+  .nod.vald { border-color: var(--amber); box-shadow: 0 0 0 3px rgba(255,201,92,.28); }
+  .varnmarke { width: 22px; height: 22px; border-radius: 50%; background: var(--amber);
+    color: #241a05; font-size: 15px; line-height: 22px; text-align: center; font-weight: 800;
+    box-shadow: 0 1px 4px rgba(0,0,0,.5); }
+  .radiemarke { width: 116px; text-align: center; font-size: 11px; color: #ffd98e;
+    background: rgba(11,18,32,.8); border: 1px solid #5a4a24; border-radius: 5px; padding: 1px 0; }
+  @media (max-width: 780px) {
+    #ram { flex-direction: column; }
+    #panel { width: 100%; min-width: 0; height: 46vh; border-right: 0;
+      border-bottom: 1px solid var(--linje); }
+    #karta { height: 54vh; }
+  }
+</style>
+</head>
+<body>
+<div id="ram">
+  <div id="panel">
+    <h1>rita-<span>järnväg</span></h1>
+    <div class="bygg" id="bygg">byggstämpel läses…</div>
+
+    <div class="kort">
+      <h2>1 · Rita linjen</h2>
+      <div class="rad">
+        <button id="lageRita" class="pa">Rita</button>
+        <button id="lageRedigera">Redigera</button>
+        <button id="exempel">Exempel</button>
+        <button id="rensa" class="fara">Rensa</button>
+      </div>
+      <div class="hjalp" id="lageHjalp"></div>
+    </div>
+
+    <div class="kort">
+      <h2>2 · Radie mellan två segment</h2>
+      <div class="rad">
+        <label class="iv" for="radieFalt">R =</label>
+        <input type="number" id="radieFalt" value="4950" min="25" step="50">
+        <span class="hjalp" style="margin:0">m</span>
+      </div>
+      <div class="rad" style="margin-top:8px">
+        <button id="sattRadie">Sätt radie på alla hörn</button>
+        <button id="taBortRadier">Ta bort alla radier</button>
+      </div>
+      <div class="rad" style="margin-top:8px">
+        <label class="iv"><input type="checkbox" id="visaHornlinje" checked>
+          Visa hörnlinjen (orörd)</label>
+      </div>
+      <div class="hjalp">Bågen tangerar båda segmenten: tangentlängden är
+        T&nbsp;=&nbsp;R&nbsp;·&nbsp;tan(Δ/2). Ryms inte 4950&nbsp;m blir radien
+        mindre och hörnet flaggas med&nbsp;<b class="varn">!</b>.</div>
+    </div>
+
+    <div class="kort">
+      <h2>Hörn <span id="hornAntal" class="bygg"></span></h2>
+      <table><thead><tr><th>Hörn</th><th>Δ°</th><th>T krävs</th><th>R</th><th></th></tr></thead>
+        <tbody id="hornRader"><tr><td colspan="5" class="hjalp">Inga hörn än.</td></tr></tbody></table>
+    </div>
+
+    <div class="kort">
+      <h2>Segment</h2>
+      <table><thead><tr><th>#</th><th>Längd</th><th>Beslag</th><th>Kvar</th><th></th></tr></thead>
+        <tbody id="segRader"><tr><td colspan="5" class="hjalp">Ingen linje än.</td></tr></tbody></table>
+    </div>
+
+    <div class="kort">
+      <h2>Varningar</h2>
+      <div id="varningar"><div class="inget">Inga varningar.</div></div>
+    </div>
+
+    <div class="kort">
+      <h2>Linjen</h2>
+      <div class="stat"><span>Hörnlinje (orörd)</span><b id="langdHorn">–</b></div>
+      <div class="stat"><span>Med radier</span><b id="langdFardig">–</b></div>
+      <div class="stat"><span>Skillnad</span><b id="langdDiff">–</b></div>
+      <div class="rad" style="margin-top:8px">
+        <button id="expGeoJson">GeoJSON</button>
+        <button id="expCsv">Nodlista (CSV)</button>
+      </div>
+      <div class="hjalp" id="exportHjalp"></div>
+    </div>
+
+    <div class="hjalp">Koordinater visas i SWEREF 99 TM (EPSG:3006). All längd och
+      alla radier räknas i meter i det planet.</div>
+  </div>
+
+  <div id="karta"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="geom.js"></script>
+<script>
+/* rita-jarnvag — gränssnittet. Geometrin ligger i geom.js. */
+"use strict";
+
+var R_STD = 4950;
+var GOLV = 25;                       // minsta radie vi ritar (m); orsaken flaggas
+var farg = { linje: "#3ddbb8", bage: "#ffc95c", hornlinje: "#8aa0c4", kort: "#ff8d7a" };
+
+var state = {
+  noder: [],        // [{lat, lng}]
+  aktiva: [],       // true per hörn (index 0 och sista är ändpunkter)
+  R: R_STD,
+  lage: "rita",
+  vald: null,
+  visaHornlinje: true
+};
+var senaste = null;  // senaste beräkningen, för tabeller och export
+
+/* --- kartan --- */
+var karta = L.map("karta", { center: [57.705, 11.96], zoom: 13, zoomControl: true });
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+  { maxZoom: 19, attribution: "© OpenStreetMap" }).addTo(karta);
+
+var lager = {
+  hornlinje: L.layerGroup().addTo(karta),
+  rak: L.layerGroup().addTo(karta),
+  bage: L.layerGroup().addTo(karta),
+  kort: L.layerGroup().addTo(karta),
+  noder: L.layerGroup().addTo(karta),
+  marken: L.layerGroup().addTo(karta)
+};
+var gummi = null;                   // gummiband i rita-läget
+var nodmarken = [];                 // markörer per nod (för drag)
+
+/* --- hjälpare --- */
+function tillSwerefLista() {
+  return state.noder.map(function (p) { return Geom.tillSweref(p.lat, p.lng); });
+}
+function tillLatLngLista(punkter) {
+  return punkter.map(function (p) { var w = Geom.tillWgs84(p.e, p.n); return [w.lat, w.lon]; });
+}
+function tal(x, dec) {
+  return Geom.tusental(x, dec === undefined ? 1 : dec);
+}
+function sattStatus(text, klass) {
+  var el = document.getElementById("exportHjalp");
+  el.className = "hjalp " + (klass || "");
+  el.textContent = text;
+}
+
+/* --- beräkningen --- */
+function rakna() {
+  var sw = tillSwerefLista();
+  var n = sw.length;
+  var aktivaFalt = [];
+  for (var i = 0; i < n; i++) aktivaFalt.push(!!state.aktiva[i] && i > 0 && i < n - 1);
+
+  var fordelning = Geom.losRadier(sw, state.R, aktivaFalt, GOLV);
+  var delar = [];        // [{typ:'rak'|'bage', punkter:[sweref], horn, R}]
+  var bagar = [];
+  var fardig = [];       // hela den färdiga linjen, sweref
+  var varningar = [];
+
+  if (n > 0) {
+    fardig.push(sw[0]);
+    var fran = sw[0];
+    for (i = 1; i < n - 1; i++) {
+      var oomojligt = fordelning.omojligt && fordelning.omojligt[i];
+      if (aktivaFalt[i] && !oomojligt && fordelning.delta[i] !== null && fordelning.R[i] > 0) {
+        var h = Geom.horn(sw[i - 1], sw[i], sw[i + 1], fordelning.R[i]);
+        if (!h.fel) {
+          delar.push({ typ: "rak", punkter: [fran, h.pc] });
+          delar.push({ typ: "bage", punkter: h.punkter, horn: i, R: h.R });
+          bagar.push({ horn: i, R: h.R, T: h.T, deltaGrad: h.deltaGrad, mitt: h.mitt,
+            pc: h.pc, pt: h.pt, punkter: h.punkter, behov: fordelning.T[i] });
+          for (var j = 1; j < h.punkter.length; j++) fardig.push(h.punkter[j]);
+          fran = h.pt;
+          continue;
+        }
+      }
+      delar.push({ typ: "rak", punkter: [fran, sw[i]] });
+      fardig.push(sw[i]);
+      fran = sw[i];
+    }
+    if (n > 1) {
+      delar.push({ typ: "rak", punkter: [fran, sw[n - 1]] });
+      fardig.push(sw[n - 1]);
+    }
+  }
+
+  // Varningar per hörn: radien blev mindre än den efterfrågade.
+  var hornStatus = [];
+  for (i = 0; i < n; i++) hornStatus.push(null);
+  for (i = 1; i < n - 1; i++) {
+    if (!aktivaFalt[i]) continue;
+    var omojligt = fordelning.omojligt && fordelning.omojligt[i];
+    if (fordelning.delta[i] === null || omojligt) {
+      hornStatus[i] = { fel: true, omojligt: true,
+        text: "Hörn " + (i + 1) + ": " + (fordelning.vag[i] || "ingen riktning att lägga en radie i") };
+    } else if (fordelning.R[i] < state.R - 1e-6) {
+      hornStatus[i] = { fel: true, text: "Hörn " + (i + 1) + ": " + fordelning.vag[i] };
+    } else {
+      hornStatus[i] = { fel: false };
+    }
+  }
+  for (i = 1; i < n - 1; i++) if (hornStatus[i] && hornStatus[i].fel) varningar.push(hornStatus[i].text);
+
+  // Segment: beslag = bågens tangent från vardera änden, kvar = ledigt.
+  var segment = [];
+  for (i = 0; i < n - 1; i++) {
+    var beslag = (aktivaFalt[i] ? fordelning.T[i] : 0) + (aktivaFalt[i + 1] ? fordelning.T[i + 1] : 0);
+    var kvar = fordelning.L[i] - beslag;
+    // ett segment intill ett hörn där ingen kurva ryms är också för kort
+    var intillOmojligt = (aktivaFalt[i] && fordelning.omojligt[i]) ||
+      (aktivaFalt[i + 1] && fordelning.omojligt[i + 1]);
+    segment.push({ nr: i, langd: fordelning.L[i], beslag: beslag, kvar: kvar,
+      kort: kvar < -1e-6, omojligt: intillOmojligt });
+  }
+  for (i = 0; i < segment.length; i++) {
+    if (segment[i].kort) {
+      varningar.push("Segment " + (i + 1) + " (" + tal(segment[i].langd, 0) +
+        " m) är kortare än bågarnas sammanlagda tangentlängd " +
+        tal(segment[i].beslag, 0) + " m — något av hörnen har fått en för liten radie.");
+    }
+  }
+
+  return {
+    sw: sw, fordelning: fordelning, aktiva: aktivaFalt, delar: delar, bagar: bagar,
+    fardig: fardig, segment: segment, varningar: varningar, hornStatus: hornStatus,
+    langdHorn: Geom.linjelangd(sw), langdFardig: Geom.linjelangd(fardig)
+  };
+}
+
+/* --- ritningen --- */
+function rita() {
+  senaste = rakna();
+  lager.hornlinje.clearLayers(); lager.rak.clearLayers(); lager.bage.clearLayers();
+  lager.kort.clearLayers(); lager.noder.clearLayers(); lager.marken.clearLayers();
+
+  // hörnlinjen: det användaren ritade, orörd
+  if (state.visaHornlinje && senaste.sw.length > 1) {
+    L.polyline(tillLatLngLista(senaste.sw),
+      { color: farg.hornlinje, weight: 1.6, dashArray: "6 6", opacity: .9 }).addTo(lager.hornlinje);
+  }
+
+  // raka stycken och bågar, var för sig
+  senaste.delar.forEach(function (d) {
+    var ll = tillLatLngLista(d.punkter);
+    if (ll.length < 2) return;
+    if (d.typ === "rak") {
+      L.polyline(ll, { color: farg.linje, weight: 4, opacity: .95 }).addTo(lager.rak);
+    } else {
+      L.polyline(ll, { color: farg.bage, weight: 6, opacity: .95 }).addTo(lager.bage);
+    }
+  });
+
+  // korta segment markeras i sin fulla utsträckning
+  senaste.segment.forEach(function (s) {
+    if (!s.kort) return;
+    L.polyline(tillLatLngLista([senaste.sw[s.nr], senaste.sw[s.nr + 1]]),
+      { color: farg.kort, weight: 3, dashArray: "4 5", opacity: .95 }).addTo(lager.kort);
+  });
+
+  // markörer: noder, radieetiketter, varningsmärken
+  state.noder.forEach(function (p, i) {
+    var vald = state.vald === i ? " vald" : "";
+    var m = L.marker([p.lat, p.lng], {
+      draggable: state.lage === "redigera",
+      keyboard: false,
+      icon: L.divIcon({ className: "", html: '<div class="nod' + vald + '">' + (i + 1) + '</div>',
+        iconSize: [22, 22], iconAnchor: [11, 11] }),
+      zIndexOffset: 400
+    }).addTo(lager.noder);
+    m.on("click", function (e) { L.DomEvent.stopPropagation(e); state.vald = i; rita(); });
+    m.on("drag", function (e) {
+      var ll = e.target.getLatLng();
+      state.noder[i] = { lat: ll.lat, lng: ll.lng };
+      rita();
+    });
+    nodmarken[i] = m;
+  });
+
+  senaste.bagar.forEach(function (b) {
+    var w = Geom.tillWgs84(b.mitt.e, b.mitt.n);
+    L.marker([w.lat, w.lon], {
+      interactive: false,
+      icon: L.divIcon({ className: "", html: '<div class="radiemarke">R = ' + tal(b.R, 0) + ' m</div>',
+        iconSize: [116, 16], iconAnchor: [58, 8] })
+    }).addTo(lager.marken);
+  });
+
+  senaste.hornStatus.forEach(function (st, i) {
+    if (!st || !st.fel) return;
+    var p = state.noder[i];
+    L.marker([p.lat, p.lng], {
+      icon: L.divIcon({ className: "", html: '<div class="varnmarke">!</div>',
+        iconSize: [22, 22], iconAnchor: [11, 32] }),
+      zIndexOffset: 900
+    }).addTo(lager.marken).bindTooltip(st.text, { direction: "top", offset: [0, -6] });
+  });
+
+  ritaTabeller();
+}
+
+function ritaTabeller() {
+  var n = state.noder.length;
+  var fordelning = senaste.fordelning;
+
+  // hörn
+  var hb = document.getElementById("hornRader");
+  hb.innerHTML = "";
+  var antalHorn = Math.max(0, n - 2);
+  document.getElementById("hornAntal").textContent = antalHorn ? "(" + antalHorn + ")" : "";
+  if (!antalHorn) {
+    hb.innerHTML = '<tr><td colspan="5" class="hjalp">Inga hörn än — minst tre noder behövs.</td></tr>';
+  }
+  for (var i = 1; i < n - 1; i++) {
+    var d = fordelning.delta[i];
+    var deltaGrad = d === null ? null : d * 180 / Math.PI;
+    var tkrav = d === null ? null : state.R * Math.tan(Math.abs(d) / 2);
+    var r = fordelning.R[i];
+    var st = senaste.hornStatus[i] || { fel: false };
+    var tr = document.createElement("tr");
+    var visarR = state.aktiva[i] && !(senaste.fordelning.omojligt && senaste.fordelning.omojligt[i]);
+    tr.innerHTML =
+      "<td>" + (i + 1) + "</td>" +
+      "<td>" + (deltaGrad === null ? "–" : tal(deltaGrad, 1)) + "</td>" +
+      "<td>" + (tkrav === null || !isFinite(tkrav) ? "–" : tal(tkrav, 0)) + "</td>" +
+      "<td class=\"" + (st.fel ? "varn" : "ok") + "\">" +
+        (visarR ? tal(r, 0) : "–") + "</td>";
+    var td = document.createElement("td");
+    var b = document.createElement("button");
+    b.textContent = state.aktiva[i] ? "ta bort" : "sätt radie";
+    b.className = state.aktiva[i] ? "fara" : "";
+    b.onclick = (function (ix) {
+      return function () { vaxlaRadie(ix); };
+    })(i);
+    td.appendChild(b);
+    tr.appendChild(td);
+    hb.appendChild(tr);
+  }
+
+  // segment
+  var sb = document.getElementById("segRader");
+  sb.innerHTML = "";
+  if (n < 2) {
+    sb.innerHTML = '<tr><td colspan="5" class="hjalp">Ingen linje än.</td></tr>';
+  }
+  for (i = 0; i < n - 1; i++) {
+    var s = senaste.segment[i];
+    var tr2 = document.createElement("tr");
+    var segStatus = s.kort ? "<span class=\"fel\">för kort</span>"
+      : (s.omojligt ? "<span class=\"varn\">för kort för kurvan</span>" : "ok");
+    tr2.innerHTML =
+      "<td>" + (i + 1) + " <span class=\"hjalp\">" + (i + 1) + "–" + (i + 2) + "</span></td>" +
+      "<td>" + tal(s.langd, 0) + " m</td>" +
+      "<td>" + tal(s.beslag, 0) + " m</td>" +
+      "<td class=\"" + (s.kort ? "fel" : "ok") + "\">" + tal(s.kvar, 0) + " m</td>" +
+      "<td>" + segStatus + "</td>";
+    sb.appendChild(tr2);
+  }
+
+  // varningar
+  var vb = document.getElementById("varningar");
+  vb.innerHTML = "";
+  if (!senaste.varningar.length) {
+    vb.innerHTML = '<div class="inget">Inga varningar.</div>';
+  } else {
+    senaste.varningar.forEach(function (t) {
+      var div = document.createElement("div");
+      div.className = "v";
+      div.textContent = "! " + t;
+      vb.appendChild(div);
+    });
+  }
+
+  // längder
+  var dh = senaste.langdHorn, df = senaste.langdFardig;
+  document.getElementById("langdHorn").textContent = n > 1 ? tal(dh, 0) + " m" : "–";
+  document.getElementById("langdFardig").textContent = n > 1 ? tal(df, 0) + " m" : "–";
+  document.getElementById("langdDiff").textContent = n > 1 ? tal(df - dh, 0) + " m" : "–";
+}
+
+/* --- åtgärder --- */
+function sattLage(nytt) {
+  state.lage = nytt;
+  document.getElementById("lageRita").className = nytt === "rita" ? "pa" : "";
+  document.getElementById("lageRedigera").className = nytt === "redigera" ? "pa" : "";
+  document.getElementById("lageHjalp").innerHTML = nytt === "rita"
+    ? "Klicka i kartan för att lägga noder i tur och ordning. Ett klick nära ett "
+      + "segment infogar noden där. <b>Esc</b> avslutar."
+    : "Dra i en nod för att flytta den. Klicka på en nod och tryck <b>Delete</b> "
+      + "för att ta bort den. <b>Dubbelklick</b> på ett segment infogar en nod.";
+  if (gummi) { karta.removeLayer(gummi); gummi = null; }
+  rita();
+}
+
+function laggTillNod(latlng) {
+  // nära en nod: avsluta i stället för att lägga en dubblett
+  var nar = narmasteNod(latlng);
+  if (nar !== null && nar.avst < 12) { sattLage("redigera"); return; }
+  var ins = narmasteSegment(latlng);
+  if (ins && ins.avst < 14) {
+    state.noder.splice(ins.nr + 1, 0, { lat: latlng.lat, lng: latlng.lng });
+    state.aktiva.splice(ins.nr + 1, 0, false);
+  } else {
+    state.noder.push({ lat: latlng.lat, lng: latlng.lng });
+    state.aktiva.push(false);
+  }
+  rita();
+}
+
+function narmasteNod(latlng) {
+  var bast = null;
+  state.noder.forEach(function (p, i) {
+    var d = karta.latLngToContainerPoint(latlng)
+      .distanceTo(karta.latLngToContainerPoint([p.lat, p.lng]));
+    if (!bast || d < bast.avst) bast = { nr: i, avst: d };
+  });
+  return bast;
+}
+function narmasteSegment(latlng) {
+  var p = karta.latLngToContainerPoint(latlng);
+  var bast = null;
+  for (var i = 0; i < state.noder.length - 1; i++) {
+    var a = karta.latLngToContainerPoint([state.noder[i].lat, state.noder[i].lng]);
+    var b = karta.latLngToContainerPoint([state.noder[i + 1].lat, state.noder[i + 1].lng]);
+    var ab = b.subtract(a), ap = p.subtract(a);
+    // Leaflet 1.9 har ingen Point.dot — räkna den själv
+    var skal = ab.x * ab.x + ab.y * ab.y;
+    var t = skal > 0 ? Math.max(0, Math.min(1, (ab.x * ap.x + ab.y * ap.y) / skal)) : 0;
+    var d = a.add(ab.multiplyBy(t)).distanceTo(p);
+    if (!bast || d < bast.avst) bast = { nr: i, avst: d };
+  }
+  return bast;
+}
+
+function vaxlaRadie(i) {
+  if (i <= 0 || i >= state.noder.length - 1) return;
+  state.aktiva[i] = !state.aktiva[i];
+  rita();
+}
+function sattRadiePaAlla() {
+  state.R = Math.max(GOLV, Number(document.getElementById("radieFalt").value) || R_STD);
+  for (var i = 1; i < state.noder.length - 1; i++) state.aktiva[i] = true;
+  rita();
+}
+function taBortAllaRadier() {
+  for (var i = 0; i < state.aktiva.length; i++) state.aktiva[i] = false;
+  rita();
+}
+function taBortNod(i) {
+  state.noder.splice(i, 1);
+  state.aktiva.splice(i, 1);
+  if (state.aktiva.length > 0) { state.aktiva[0] = false; state.aktiva[state.aktiva.length - 1] = false; }
+  state.vald = null;
+  rita();
+}
+function rensa() {
+  state.noder = []; state.aktiva = []; state.vald = null;
+  sattStatus("");
+  rita();
+}
+
+/* --- exempel: en linje i Göteborgstrakten med ett för kort segment --- */
+var EXEMPEL = [
+  [321000, 6399500], [325500, 6399800], [329900, 6397900],
+  [331800, 6399300], [336000, 6398000]
+];
+function exempel() {
+  state.noder = EXEMPEL.map(function (p) {
+    var w = Geom.tillWgs84(p[0], p[1]);
+    return { lat: w.lat, lng: w.lon };
+  });
+  state.aktiva = state.noder.map(function () { return false; });
+  state.vald = null;
+  document.getElementById("radieFalt").value = R_STD;
+  state.R = R_STD;
+  sattRadiePaAlla();
+  karta.fitBounds(L.latLngBounds(state.noder.map(function (p) { return [p.lat, p.lng]; })), { padding: [20, 20] });
+}
+
+/* --- export --- */
+function byggGeoJson() {
+  var funktioner = [];
+  var s = senaste;
+  var langdHorn = s.langdHorn, langdFardig = s.langdFardig;
+  if (s.fardig.length > 1) {
+    funktioner.push({ type: "Feature", properties: {
+        namn: "fardig_linje", beskrivning: "Linjen med radier (raka stycken + bågar)",
+        langd_m: Math.round(langdFardig * 1000) / 1000, R_krav_m: state.R,
+        antal_horn_med_radie: s.bagar.length, varningar: s.varningar },
+      geometry: { type: "LineString",
+        coordinates: s.fardig.map(function (p) { var w = Geom.tillWgs84(p.e, p.n); return [w.lon, w.lat]; }) } });
+  }
+  if (s.sw.length > 1) {
+    funktioner.push({ type: "Feature", properties: {
+        namn: "hornlinje", beskrivning: "Den ritade hörnlinjen, orörd",
+        langd_m: Math.round(langdHorn * 1000) / 1000 },
+      geometry: { type: "LineString",
+        coordinates: s.sw.map(function (p) { var w = Geom.tillWgs84(p.e, p.n); return [w.lon, w.lat]; }) } });
+  }
+  s.bagar.forEach(function (b) {
+    funktioner.push({ type: "Feature", properties: {
+        namn: "bage", horn: b.horn + 1, R_m: Math.round(b.R * 1000) / 1000,
+        T_m: Math.round(b.T * 1000) / 1000, delta_grad: Math.round(b.deltaGrad * 1000) / 1000,
+        baglangd_m: Math.round(b.punkter && b.punkter.length ? Geom.linjelangd(b.punkter) * 1000 : 0) / 1000,
+        sida: b.svangerVanster ? "vänster" : "höger" },
+      geometry: { type: "LineString",
+        coordinates: b.punkter.map(function (p) { var w = Geom.tillWgs84(p.x, p.y); return [w.lon, w.lat]; }) } });
+  });
+  state.noder.forEach(function (p, i) {
+    var sw = s.sw[i];
+    funktioner.push({ type: "Feature", properties: {
+        namn: "nod", nr: i + 1, E_sweref99tm: Math.round(sw.e * 1000) / 1000,
+        N_sweref99tm: Math.round(sw.n * 1000) / 1000,
+        R_m: state.aktiva[i] ? Math.round(s.fordelning.R[i] * 1000) / 1000 : null },
+      geometry: { type: "Point", coordinates: [p.lng, p.lat] } });
+  });
+  return { type: "FeatureCollection",
+    properties: { tjanst: "rita-jarnvag", koordinatsystem: "WGS84 (EPSG:4326), GeoJSON enligt RFC 7946",
+      sweref_i_nodernas_egenskaper: "EPSG:3006", R_krav_m: state.R,
+      antal_varningar: s.varningar.length, varningar: s.varningar },
+    features: funktioner };
+}
+
+function byggCsv() {
+  var rader = ["nr;lat;lng;E_sweref99tm;N_sweref99tm;R_m;T_m;delta_grad;anmarkning"];
+  state.noder.forEach(function (p, i) {
+    var sw = senaste.sw[i];
+    var st = senaste.hornStatus[i];
+    var R = state.aktiva[i] ? senaste.fordelning.R[i] : "";
+    var T = state.aktiva[i] ? senaste.fordelning.T[i] : "";
+    var d = senaste.fordelning.delta[i];
+    rader.push([i + 1,
+      p.lat.toFixed(8), p.lng.toFixed(8),
+      sw.e.toFixed(3), sw.n.toFixed(3),
+      R === "" ? "" : R.toFixed(1), T === "" ? "" : T.toFixed(1),
+      d === null || d === undefined || !state.aktiva[i] ? "" : (d * 180 / Math.PI).toFixed(2),
+      st && st.fel ? "radie för liten: " + fordelningVag(i) : ""
+    ].join(";"));
+  });
+  return rader.join("\n") + "\n";
+}
+function fordelningVag(i) {
+  return senaste.fordelning.vag[i] || "";
+}
+
+function laddaNer(namn, text, typ, vad) {
+  var blob = new Blob([text], { type: typ });
+  var a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = namn;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  window.__senasteNedladdning = { namn: namn, tecken: text.length, vad: vad || "" };
+  sattStatus("Skrev " + namn + " (" + text.length + " tecken" + (vad ? ", " + vad : "") + ").", "ok");
+}
+
+function exporteraGeoJson() {
+  if (!state.noder.length) { sattStatus("Inget att exportera — rita en linje först.", "varn"); return; }
+  var gj = byggGeoJson();
+  window.__senasteGeoJson = gj;
+  laddaNer("rita-jarnvag-linje.geojson", JSON.stringify(gj, null, 1), "application/geo+json",
+    gj.features.length + " objekt");
+}
+function exporteraCsv() {
+  if (!state.noder.length) { sattStatus("Inget att exportera — rita en linje först.", "varn"); return; }
+  var csv = byggCsv();
+  window.__senasteCsv = csv;
+  laddaNer("rita-jarnvag-noder.csv", csv, "text/csv",
+    state.noder.length + " noder, " + senaste.bagar.length + " bågar");
+}
+
+/* --- händelser --- */
+karta.on("click", function (e) {
+  if (state.lage !== "rita") return;
+  laggTillNod(e.latlng);
+});
+karta.on("mousemove", function (e) {
+  var sw = Geom.tillSweref(e.latlng.lat, e.latlng.lng);
+  document.title = "rita-järnväg — E " + sw.e.toFixed(0) + " N " + sw.n.toFixed(0);
+  if (state.lage === "rita" && state.noder.length) {
+    var sista = state.noder[state.noder.length - 1];
+    if (!gummi) {
+      gummi = L.polyline([[sista.lat, sista.lng], [e.latlng.lat, e.latlng.lng]],
+        { color: farg.linje, weight: 2, dashArray: "3 6", opacity: .65 }).addTo(karta);
+    } else {
+      gummi.setLatLngs([[sista.lat, sista.lng], [e.latlng.lat, e.latlng.lng]]);
+    }
+  }
+});
+karta.on("dblclick", function (e) {
+  if (state.lage !== "redigera") return;
+  var ins = narmasteSegment(e.latlng);
+  if (ins && ins.avst < 14) {
+    state.noder.splice(ins.nr + 1, 0, { lat: e.latlng.lat, lng: e.latlng.lng });
+    state.aktiva.splice(ins.nr + 1, 0, false);
+    rita();
+  }
+});
+document.addEventListener("keydown", function (e) {
+  if (e.key === "Escape") { sattLage("redigera"); }
+  if ((e.key === "Delete" || e.key === "Backspace") && state.vald !== null) {
+    e.preventDefault();
+    var i = state.vald;
+    taBortNod(i);
+  }
+});
+
+document.getElementById("lageRita").onclick = function () { sattLage("rita"); };
+document.getElementById("lageRedigera").onclick = function () { sattLage("redigera"); };
+document.getElementById("exempel").onclick = exempel;
+document.getElementById("rensa").onclick = rensa;
+document.getElementById("sattRadie").onclick = sattRadiePaAlla;
+document.getElementById("taBortRadier").onclick = taBortAllaRadier;
+document.getElementById("radieFalt").onchange = function () {
+  state.R = Math.max(GOLV, Number(this.value) || R_STD);
+  this.value = state.R;
+  rita();
+};
+document.getElementById("visaHornlinje").onchange = function () {
+  state.visaHornlinje = this.checked;
+  rita();
+};
+document.getElementById("expGeoJson").onclick = exporteraGeoJson;
+document.getElementById("expCsv").onclick = exporteraCsv;
+
+/* --- start --- */
+sattLage("rita");
+rita();
+if (window.__bygginfo) {
+  visaByggstämpel(window.__bygginfo);
+} else {
+  fetch("helsa.json", { cache: "no-store" }).then(function (r) { return r.json(); })
+    .then(visaByggstämpel)
+    .catch(function () {
+      document.getElementById("bygg").textContent = "lokal körning — ingen byggstämpel";
+      window.__bygg = null;
+    });
+}
+function visaByggstämpel(h) {
+  document.getElementById("bygg").textContent =
+    "v" + h.version + " · commit " + (h.commit_kort || "?") + " · " + (h.byggd || "");
+  window.__bygg = h;
+}
+
+/* testkrokar: appen ska gå att mäta utifrån */
+window.__app = {
+  state: state, rita: rita, ritaTabeller: ritaTabeller, rakna: rakna, sattLage: sattLage,
+  laggTillNod: laggTillNod, sattRadiePaAlla: sattRadiePaAlla, taBortAllaRadier: taBortAllaRadier,
+  vaxlaRadie: vaxlaRadie, taBortNod: taBortNod, exempel: exempel, rensa: rensa,
+  exporteraGeoJson: exporteraGeoJson, exporteraCsv: exporteraCsv, byggGeoJson: byggGeoJson,
+  byggCsv: byggCsv, senaste: function () { return senaste; }, karta: karta, Geom: Geom,
+  lager: lager, nodmarken: function () { return nodmarken; }
+};
+</script>
+</body>
+</html>

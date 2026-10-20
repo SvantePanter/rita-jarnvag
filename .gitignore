@@ -1,0 +1,7 @@
+# byggkatalogen skapas av bygg.sh och publiceras av Render
+_site/
+# provets mellanfiler
+prov/_ut.json
+prov/_punkter.json
+__pycache__/
+.pytest_cache/
