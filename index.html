@@ -438,10 +438,11 @@ function ritaKorridor() {
   // Konturen är inte en slinga utan korsningar: rita den tjock och röd. Leaflets
   // fyllning är even-odd, så en självkorsande ring fylls delvis utan att felet
   // syns — därför måste konturen och märket bära beskedet.
+  // Själva ytan är transparent röd, så att grundkartan och framtida grunddata
+  // (LU, naturvärden) syns under den.
   L.polygon(tillLatLngLista(korridoren.ring), {
-    color: korridoren.ok ? "#8fd7ff" : farg.kort, weight: korridoren.ok ? 1.4 : 3,
-    opacity: .9, fillColor: korridoren.ok ? farg.linje : farg.kort,
-    fillOpacity: korridoren.ok ? .13 : .1
+    color: korridoren.ok ? "#ff6b5a" : "#e02a1a", weight: korridoren.ok ? 1.6 : 3,
+    opacity: .95, fillColor: "#ff3b2f", fillOpacity: .22
   }).addTo(lager.korridor);
 
   if (!korridoren.ok && korridoren.ringEnkel && korridoren.ringEnkel.korsningar[0]) {
@@ -460,7 +461,7 @@ function ritaKorridor() {
     ? [[v[0], h[h.length - 1]], [v[v.length - 1], h[0]]]
     : [[v[0], h[0]], [v[v.length - 1], h[h.length - 1]]];
   par.forEach(function (p) {
-    L.polyline(tillLatLngLista([p[0], p[1]]), { color: "#8fd7ff", weight: 2.4,
+    L.polyline(tillLatLngLista([p[0], p[1]]), { color: "#ff6b5a", weight: 2.4,
       dashArray: "8 4", opacity: .95 }).addTo(lager.forbindelse);
   });
 
