@@ -365,13 +365,301 @@
         svangerVanster: h.svangerVanster });
     }
     ut.push({ x: punkter[n - 1].x, y: punkter[n - 1].y });
-    return { punkter: ut, bagar: bagar };
+    return { punkter: stada(ut), bagar: bagar };
   }
 
   function linjelangd(punkter) {
     var s = 0;
     for (var i = 1; i < punkter.length; i++) s += avstand(punkter[i - 1], punkter[i]);
     return s;
+  }
+
+  /* Ta bort punkter som ligger (nästan) på samma plats. Nödvändigt innan
+   * riktningar räknas: när radielösaren delar bristen exakt möts två bågar i
+   * samma punkt, och en sträcka på 1e-10 m har ingen meningsfull riktning —
+   * mittpunktsberäkningen far iväg hundratals meter på en sådan. */
+  function stada(punkter, min) {
+    min = min === undefined ? 1e-6 : min;
+    var ut = [];
+    for (var i = 0; i < punkter.length; i++) {
+      var p = punkter[i];
+      if (ut.length && avstand(ut[ut.length - 1], p) < min) continue;
+      ut.push(p);
+    }
+    if (ut.length > 1 && avstand(ut[0], ut[ut.length - 1]) < min) ut.pop();
+    return ut;
+  }
+
+  /* ================= polygon och korridor ================= */
+
+  /* Kortaste avståndet från en punkt till ett segment, med fotpunkten. */
+  function avstandTillSegment(p, a, b) {
+    var dx = b.x - a.x, dy = b.y - a.y;
+    var skal = dx * dx + dy * dy;
+    var t = skal > 0 ? ((p.x - a.x) * dx + (p.y - a.y) * dy) / skal : 0;
+    t = Math.max(0, Math.min(1, t));
+    var fot = P(a.x + dx * t, a.y + dy * t);
+    return { avst: Math.hypot(p.x - fot.x, p.y - fot.y), t: t, fot: fot, i: 0 };
+  }
+
+  /* Kortaste avståndet från en punkt till en polylinje. Bredden i en korridor
+   * måste mätas så: de två sidorna ritas oberoende av varandra och har därför
+   * sällan samma nodantal. */
+  function avstandTillPolylinje(p, punkter) {
+    var bast = null;
+    for (var i = 0; i + 1 < punkter.length; i++) {
+      var a = avstandTillSegment(p, punkter[i], punkter[i + 1]);
+      a.i = i;
+      if (!bast || a.avst < bast.avst) bast = a;
+    }
+    return bast;                     // null om polylinjen har färre än två punkter
+  }
+
+  /* Skär två segment varandra? Ändpunkter som rör vid varandra räknas som träff. */
+  function segmentKorsar(a1, a2, b1, b2) {
+    var d1x = a2.x - a1.x, d1y = a2.y - a1.y;
+    var d2x = b2.x - b1.x, d2y = b2.y - b1.y;
+    var nam = d1x * d2y - d1y * d2x;
+    if (Math.abs(nam) < 1e-12) return { korsar: false, parallella: true };
+    var ex = b1.x - a1.x, ey = b1.y - a1.y;
+    var s = (ex * d2y - ey * d2x) / nam;
+    var t = (ex * d1y - ey * d1x) / nam;
+    if (s < -1e-9 || s > 1 + 1e-9 || t < -1e-9 || t > 1 + 1e-9) return { korsar: false };
+    return { korsar: true, s: s, t: t, punkt: P(a1.x + d1x * s, a1.y + d1y * s) };
+  }
+
+  /* Skolax i e/n-planet. Positiv area = moturs, vilket är den ordning
+   * GeoJSON kräver för en yttre ring (RFC 7946). */
+  function ringArea(ring) {
+    var a = 0;
+    for (var i = 0; i < ring.length; i++) {
+      var p = ring[i], q = ring[(i + 1) % ring.length];
+      a += p.x * q.y - q.x * p.y;
+    }
+    return a / 2;
+  }
+
+  /* Är ringen en slinga utan korsningar? Angränsande segment delar ändpunkt
+   * och räknas inte som korsning. */
+  function ringArEnkel(ring) {
+    var seg = [], m = ring.length, i;
+    for (i = 0; i < m; i++) {
+      var a = ring[i], b = ring[(i + 1) % m];
+      if (avstand(a, b) > 1e-9) seg.push({ i: i, a: a, b: b });
+    }
+    var korsningar = [];
+    for (var x = 0; x < seg.length; x++) {
+      for (var y = x + 1; y < seg.length; y++) {
+        if (y === x + 1) continue;                        // grannar
+        if (x === 0 && y === seg.length - 1) continue;     // första och sista
+        var k = segmentKorsar(seg[x].a, seg[x].b, seg[y].a, seg[y].b);
+        if (k.korsar) {
+          korsningar.push({ i: seg[x].i, j: seg[y].i, punkt: k.punkt });
+          if (korsningar.length >= 5) {
+            return { ok: false, korsningar: korsningar, antal: "fler än 5" };
+          }
+        }
+      }
+    }
+    return { ok: korsningar.length === 0, korsningar: korsningar, antal: korsningar.length };
+  }
+
+  /* Breddprofil: provpunkter var steg:e meter längs vardera sidan, mätta mot
+   * den andra sidan. Att mäta bara i noderna hade missat avsmalningar mitt på
+   * ett segment. */
+  function korridorbredd(vanster, hoger, steg) {
+    steg = steg || 25;
+    var profil = [];
+    function langs(punkter, mot, sida) {
+      var langt = 0, i, k;
+      for (i = 0; i + 1 < punkter.length; i++) {
+        var seg = avstand(punkter[i], punkter[i + 1]);
+        var antal = Math.max(1, Math.ceil(seg / steg));
+        for (k = 0; k < antal; k++) {
+          var t = k / antal;
+          var p = P(punkter[i].x + (punkter[i + 1].x - punkter[i].x) * t,
+                    punkter[i].y + (punkter[i + 1].y - punkter[i].y) * t);
+          var m = avstandTillPolylinje(p, mot);
+          if (m) profil.push({ langs: langt + seg * t, bredd: m.avst, punkt: p, sida: sida });
+        }
+        langt += seg;
+      }
+      var sista = punkter[punkter.length - 1];
+      var ms = avstandTillPolylinje(sista, mot);
+      if (ms) profil.push({ langs: langt, bredd: ms.avst, punkt: P(sista.x, sista.y), sida: sida });
+    }
+    langs(vanster, hoger, "vanster");
+    langs(hoger, vanster, "hoger");
+    var min = null, max = null;
+    for (var j = 0; j < profil.length; j++) {
+      if (!min || profil[j].bredd < min.bredd) min = profil[j];
+      if (!max || profil[j].bredd > max.bredd) max = profil[j];
+    }
+    return { profil: profil, min: min, max: max };
+  }
+
+  /* Hur långt från vinkelrät en förslutningslinje ligger, i grader. Riktningarna
+   * är sidornas enhetsvektorer vid den änden (tecknet spelar ingen roll). */
+  function slutningsvinkel(fran, till, riktningar) {
+    var c = enhet({ x: till.x - fran.x, y: till.y - fran.y });
+    if (c.noll) return { grad: null, noll: true };
+    var varst = 0;
+    for (var i = 0; i < riktningar.length; i++) {
+      var u = riktningar[i];
+      if (!u || u.noll) continue;
+      var cos = Math.abs(u.x * c.x + u.y * c.y);
+      cos = Math.max(-1, Math.min(1, cos));
+      var avv = Math.abs(90 - Math.acos(cos) * 180 / Math.PI);
+      if (avv > varst) varst = avv;
+    }
+    return { grad: varst, noll: false };
+  }
+
+  function riktningMellan(a, b) { return enhet({ x: b.x - a.x, y: b.y - a.y }); }
+
+  /* Korridoren av två sidor: ring, area, bredd, förslutningar och de kontroller
+   * som avgör om den är ritad som en möjlig korridor.
+   *
+   * Ringen är vänster framlänges + höger baklänges, alltså förslutning slut mot
+   * slut och start mot start. Ritas den ena sidan i motsatt riktning blir den
+   * ringen ett timglas — då prövas den korsvisa parningen i stället, och valet
+   * rapporteras. */
+  function korridor(vanster, hoger, alternativ) {
+    alternativ = alternativ || {};
+    var steg = alternativ.steg || 25;
+    var breddMin = alternativ.breddMin === undefined ? 30 : alternativ.breddMin;
+    var breddMax = alternativ.breddMax === undefined ? 400 : alternativ.breddMax;
+    var varningar = [];
+    var ut = { ok: false, ring: null, parning: null, area_m2: null, ringEnkel: null,
+      bredd: null, andar: null, langd: null, medurs: null, varningar: varningar };
+
+    if (!vanster || vanster.length < 2 || !hoger || hoger.length < 2) {
+      varningar.push("Båda sidorna behöver minst två noder för att korridoren ska kunna slutas.");
+      return ut;
+    }
+    // Dubbla punkter (två bågar som möts) får inte bli riktningar åt slumpen.
+    vanster = stada(vanster);
+    hoger = stada(hoger);
+    if (vanster.length < 2 || hoger.length < 2) {
+      varningar.push("En av sidorna har mindre än två punkter kvar sedan dubbelpunkter " +
+        "rensats — kontrollera noderna.");
+      return ut;
+    }
+
+    var ring1 = vanster.concat(hoger.slice().reverse());   // start mot start
+    var ring2 = vanster.concat(hoger);                     // korsvis
+    var e1 = ringArEnkel(ring1), e2 = ringArEnkel(ring2);
+    var vald, parning, enkel;
+    if (e1.ok) { vald = ring1; parning = "start-start/slut-slut"; enkel = e1; }
+    else if (e2.ok) {
+      vald = ring2; parning = "korsvis"; enkel = e2;
+      varningar.push("Sidorna är ritade i motsatt riktning, så ändarna har parats ihop korsvis " +
+        "(vänster start mot höger slut). Rita om den ena sidan åt samma håll, annars blir " +
+        "korridoren ett timglas.");
+    } else { vald = ring1; parning = "start-start/slut-slut"; enkel = e1; }
+
+    var area = ringArea(vald);
+    ut.medurs = area < 0;
+    ut.ring = ut.medurs ? vald.slice().reverse() : vald.slice();
+    ut.parning = parning;
+    ut.area_m2 = Math.abs(area);
+    ut.ringEnkel = enkel;
+    ut.ok = enkel.ok;
+
+    if (!enkel.ok) {
+      var k0 = enkel.korsningar[0];
+      varningar.push("Korridoren är inte en slinga utan korsningar — konturen skär sig själv vid E " +
+        Math.round(k0.punkt.e) + " N " + Math.round(k0.punkt.n) + " (" + enkel.antal +
+        " korsningar). Flytta noder tills konturen sluter tätt utan att skära sig.");
+    }
+
+    var b = korridorbredd(vanster, hoger, steg);
+    ut.bredd = { min: b.min, max: b.max, profil: b.profil, steg: steg };
+    function varText(p) {
+      return "E " + Math.round(p.punkt.e) + " N " + Math.round(p.punkt.n) + " (" +
+        tusental(p.langs) + " m in på " + (p.sida === "vanster" ? "vänstersidan" : "högersidan") + ")";
+    }
+    if (b.min && b.min.bredd < breddMin - 1e-6) {
+      varningar.push("Korridoren är smalare än " + tusental(breddMin) + " m: " +
+        tusental(b.min.bredd) + " m vid " + varText(b.min) + " — där ryms ingen järnväg.");
+    }
+    if (b.max && b.max.bredd > breddMax + 1e-6) {
+      varningar.push("Korridoren är bredare än " + tusental(breddMax) + " m: " +
+        tusental(b.max.bredd) + " m vid " + varText(b.max) + " — mer mark än korridoren behöver.");
+    }
+
+    // Ändförslutningarna. Vid korsvis parning byter ändarna partner.
+    var vN = vanster.length, hN = hoger.length;
+    var korsvis = parning === "korsvis";
+    var aStart = korsvis
+      ? slutningsvinkel(vanster[0], hoger[hN - 1], [riktningMellan(vanster[0], vanster[1]),
+                                                    riktningMellan(hoger[hN - 1], hoger[hN - 2])])
+      : slutningsvinkel(vanster[0], hoger[0], [riktningMellan(vanster[0], vanster[1]),
+                                               riktningMellan(hoger[0], hoger[1])]);
+    var aSlut = korsvis
+      ? slutningsvinkel(vanster[vN - 1], hoger[0], [riktningMellan(vanster[vN - 1], vanster[vN - 2]),
+                                                    riktningMellan(hoger[0], hoger[1])])
+      : slutningsvinkel(vanster[vN - 1], hoger[hN - 1], [riktningMellan(vanster[vN - 1], vanster[vN - 2]),
+                                                     riktningMellan(hoger[hN - 1], hoger[hN - 2])]);
+    ut.andar = { start: aStart, slut: aSlut };
+    if (aStart.noll) {
+      varningar.push("Startnoderna i de två sidorna ligger på samma plats — förslutningen blir en spets.");
+    } else if (aStart.grad > 45) {
+      varningar.push("Ändförslutningen vid korridorens början ligger " + tusental(aStart.grad) +
+        "° från vinkelrät (gräns 45°) — ändytan blir en kil i stället för en snittyta.");
+    }
+    if (aSlut.noll) {
+      varningar.push("Slutnoderna i de två sidorna ligger på samma plats — förslutningen blir en spets.");
+    } else if (aSlut.grad > 45) {
+      varningar.push("Ändförslutningen vid korridorens slut ligger " + tusental(aSlut.grad) +
+        "° från vinkelrät (gräns 45°) — ändytan blir en kil i stället för en snittyta.");
+    }
+
+    var lV = linjelangd(vanster), lH = linjelangd(hoger);
+    ut.langd = { vanster: lV, hoger: lH, medel: (lV + lH) / 2 };
+    return ut;
+  }
+
+  /* Förskjut en polylinje d meter åt höger sett i färdriktningen, med
+   * miterskarv i hörnen. Gör en korridorsida av den andra. */
+  function forskjut(punkter, d) {
+    punkter = stada(punkter);
+    var n = punkter.length;
+    if (n < 2) return { fel: "minst två noder behövs", punkter: [], varningar: [] };
+    function ratt(u) { return { x: u.y, y: -u.x }; }
+    var ut = [], varningar = [];
+    for (var i = 0; i < n; i++) {
+      var fore = i > 0 ? riktningMellan(punkter[i - 1], punkter[i]) : null;
+      var efter = i < n - 1 ? riktningMellan(punkter[i], punkter[i + 1]) : null;
+      var p;
+      if (fore && !fore.noll && efter && !efter.noll) {
+        var n1 = ratt(fore), n2 = ratt(efter);
+        var a = P(punkter[i].x + n1.x * d, punkter[i].y + n1.y * d);
+        var bp = P(punkter[i].x + n2.x * d, punkter[i].y + n2.y * d);
+        var nam = fore.x * efter.y - fore.y * efter.x;
+        if (Math.abs(nam) < 1e-12) {
+          p = a;                                    // rak linje: ingen skarv att lösa
+        } else {
+          var s = ((bp.x - a.x) * efter.y - (bp.y - a.y) * efter.x) / nam;
+          p = P(a.x + fore.x * s, a.y + fore.y * s);
+        }
+      } else if (efter && !efter.noll) {
+        var ne = ratt(efter);
+        p = P(punkter[i].x + ne.x * d, punkter[i].y + ne.y * d);
+      } else if (fore && !fore.noll) {
+        var nf = ratt(fore);
+        p = P(punkter[i].x + nf.x * d, punkter[i].y + nf.y * d);
+      } else {
+        p = P(punkter[i].x, punkter[i].y);
+      }
+      var hopp = Math.hypot(p.x - punkter[i].x, p.y - punkter[i].y);
+      if (hopp > 3 * Math.abs(d)) {
+        varningar.push("Nod " + (i + 1) + ": förskjutningen hamnar " + tusental(hopp) +
+          " m från noden — hörnet är för skarpt för att en förskjutning ska bli en snygg korridorsida.");
+      }
+      ut.push(p);
+    }
+    return { punkter: ut, varningar: varningar, fel: null };
   }
 
   return {
@@ -386,6 +674,16 @@
     byggLinje: byggLinje,
     linjelangd: linjelangd,
     tusental: tusental,
+    stada: stada,
+    avstandTillSegment: avstandTillSegment,
+    avstandTillPolylinje: avstandTillPolylinje,
+    segmentKorsar: segmentKorsar,
+    ringArea: ringArea,
+    ringArEnkel: ringArEnkel,
+    korridorbredd: korridorbredd,
+    slutningsvinkel: slutningsvinkel,
+    korridor: korridor,
+    forskjut: forskjut,
     GRS80: { a: A, f: F, e2: E2 },
     SWEREF99TM: { k0: K0, lon0: LON0, falseEasting: FE, falseNorthing: FN }
   };
