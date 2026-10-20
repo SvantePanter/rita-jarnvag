@@ -75,6 +75,18 @@
   .kort.vanster { border-left: 3px solid var(--teal); }
   .kort.hoger { border-left: 3px solid var(--bla); }
   .kort.korridor { border-left: 3px solid #8fd7ff; }
+  .kort.grund { border-left: 3px solid #c9a227; }
+  .lagerrad { display: flex; align-items: center; gap: 8px; font-size: 12.5px; padding: 3px 0; }
+  .lagerrad input { margin: 0; flex: none; }
+  .lagerrad .prick { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex: none; }
+  .lagerrad .bygg { margin-left: auto; white-space: nowrap; }
+  .grKontroll .r { display: flex; justify-content: space-between; gap: 10px; font-size: 12.5px; padding: 2px 0; }
+  .grKontroll .r span { color: var(--damp); }
+  .grKontroll .r b { font-weight: 600; }
+  .grKontroll .fel b { color: var(--rod); }
+  .grKontroll .varn b { color: var(--amber); }
+  .grKontroll .ok b { color: #7fe0a8; }
+  .grKontroll .lista { color: var(--damp); font-size: 11.5px; padding: 0 0 4px 0; }
   .stat.smal b { color: var(--rod); }
   .stat.bred b { color: var(--amber); }
   @media (max-width: 780px) {
@@ -168,6 +180,35 @@
       <div class="hjalp" id="kHjalp"></div>
     </div>
 
+    <div class="kort grund">
+      <h2>4 · Grunddata (ArcGIS Online)</h2>
+      <div class="rad">
+        <button id="agolLoggaIn">Logga in</button>
+        <span class="hjalp" id="agolStatus" style="margin:0">inte inloggad</span>
+      </div>
+      <div style="margin-top:8px">
+        <label class="lagerrad"><input type="checkbox" id="visaLU" checked>
+          <span class="prick" style="background:#c9a227"></span>LU-korridoren (att hålla sig inom)
+          <span class="bygg" id="statLU">–</span></label>
+        <label class="lagerrad"><input type="checkbox" id="visaNatur" checked>
+          <span class="prick" style="background:#ff8d3a"></span>Naturvärdespolygoner
+          <span class="bygg" id="statNatur">–</span></label>
+        <label class="lagerrad"><input type="checkbox" id="visaRitade" checked>
+          <span class="prick" style="background:#9d7bff"></span>Korridorer vi redan ritat
+          <span class="bygg" id="statRitade">–</span></label>
+        <label class="lagerrad"><input type="checkbox" id="visaNatur34">
+          <span class="prick" style="background:#ffd94a"></span>visa även naturvärde 3 och 4
+          <span class="bygg" id="statNatur34">–</span></label>
+      </div>
+      <div class="rad" style="margin-top:8px">
+        <button id="hamtaGrund">Hämta grunddatan</button>
+      </div>
+      <div class="hjalp" id="grundHjalp">Grunddatan ligger i Tyréns portal och kräver
+        inloggning. Geometrin hämtas i SWEREF 99 TM — samma plan som korridoren räknas i.
+        Naturvärde ritas efter klass: 1 röd, 2 orange, 3 gul, 4 grå.</div>
+      <div class="grKontroll" id="grundKontroll"></div>
+    </div>
+
     <div class="kort">
       <h2>Hörn <span id="hornAntal" class="bygg"></span> <span id="hornSida" class="bygg"></span></h2>
       <table><thead><tr><th>Hörn</th><th>Δ°</th><th>T krävs</th><th>R</th><th></th></tr></thead>
@@ -206,6 +247,7 @@
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="vendor/polygon-clipping.js"></script>
 <script src="geom.js"></script>
 <script>
 /* rita-jarnvag — gränssnittet. Geometrin ligger i geom.js. */
@@ -228,7 +270,8 @@ var state = {
   lage: "rita",
   vald: null,
   visaHornlinje: true,
-  visaKorridor: true
+  visaKorridor: true,
+  visaGrund: { lu: true, natur: true, ritade: true }   // grunddatans lager
 };
 var senaste = null;                     // aktiv sidas beräkning (tabeller, export)
 var senasteSidor = { vanster: null, hoger: null };
@@ -255,6 +298,7 @@ L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
   { maxZoom: 19, attribution: "© OpenStreetMap" }).addTo(karta);
 
 var lager = {
+  grund: L.layerGroup().addTo(karta),          // grunddatan, underst
   korridor: L.layerGroup().addTo(karta),       // polygonen, underst
   forbindelse: L.layerGroup().addTo(karta),    // ändförslutningarna
   hornlinje: L.layerGroup().addTo(karta),
@@ -542,6 +586,7 @@ function rita() {
   });
 
   ritaTabeller();
+  planeraGrundKontroll();       // grunddatakontrollen räknas när korridoren ändras
 }
 
 /* Slut/öppna-knappen och dess besked. Korridoren sluts av användaren, inte av
@@ -654,6 +699,7 @@ function ritaTabeller() {
       allaVarningar.push([namn === "vanster" ? "Vänster sida" : "Höger sida", t]);
     });
   });
+  grundVarningar().forEach(function (t) { allaVarningar.push(["Grunddata", t]); });
   if (!allaVarningar.length) {
     vb.innerHTML = '<div class="inget">Inga varningar.</div>';
   } else {
@@ -1029,6 +1075,406 @@ function exporteraCsv() {
     (korridoren && korridoren.ring ? ", korridorens siffror sist" : ""));
 }
 
+/* --- grunddata från ArcGIS Online ------------------------------------------
+ *
+ * Lagren ligger i Tyréns portal och kräver inloggning. Inloggningen är OAuth
+ * implicit (samma app som portal-explorer använder): appen skickar användaren
+ * till portalen och får en token tillbaka i adressfragmentet. Ingen server
+ * behövs då, och ingen hemlighet ligger i klienten — en implicit token är
+ * användarens egen och kortlivad.
+ *
+ * Geometrin frågas i SWEREF 99 TM (outSR=3006), alltså samma plan som
+ * korridoren räknas och mäts i. Ingen omräkning behövs här.
+ */
+var AGOL = {
+  portal: "https://tyrens-eu.maps.arcgis.com",
+  clientId: "SFs3W1GwTvmvbRdI",
+  nyckel: "rita_jarnvag_token",
+  lager: {
+    lu: { url: "https://services-eu1.arcgis.com/yjNDT5YdXziiZV1K/arcgis/rest/services/jvf_boy_korridor/FeatureServer/0",
+      idFalt: "OBJECTID", namnFalt: "Namn" },
+    natur: { url: "https://services-eu1.arcgis.com/yjNDT5YdXziiZV1K/arcgis/rest/services/lvf_miljo_lokaliseringsutredningen/FeatureServer/2",
+      idFalt: "FID", namnFalt: "Objektid", klassFalt: "Nvklass" },
+    ritade: { url: "https://services-eu1.arcgis.com/yjNDT5YdXziiZV1K/arcgis/rest/services/lvf_boy_korridorer/FeatureServer/0",
+      idFalt: "OBJECTID", namnFalt: "namn" }
+  }
+};
+
+var grund = { lu: [], natur: [], ritade: [], kontroll: null, fel: null, hamtad: null, tider: {} };
+var naturFarg = { "1": "#e02a1a", "2": "#ff8d3a", "3": "#ffd94a", "4": "#b9b9b9" };
+
+// Egna paneler under det vi ritar själva (overlayPane har z-index 400), så att
+// grunddatan syns men inte ligger i vägen för korridoren.
+karta.createPane("grundYta").style.zIndex = 350;
+karta.createPane("grundKant").style.zIndex = 360;
+
+function token() {
+  try {
+    var t = JSON.parse(localStorage.getItem(AGOL.nyckel) || "null");
+    if (!t || !t.token) return null;
+    if (t.giltigTill && Date.now() > t.giltigTill) return null;    // utgången: fråga portalen igen
+    return t.token;
+  } catch (e) { return null; }
+}
+
+function sparaToken(ny, sekunder) {
+  localStorage.setItem(AGOL.nyckel, JSON.stringify({
+    token: ny, giltigTill: Date.now() + (Number(sekunder) || 7200) * 1000, sparad: new Date().toISOString()
+  }));
+}
+
+function glomToken() { localStorage.removeItem(AGOL.nyckel); }
+
+/* Inloggningen: till portalen och tillbaka till den här sidan. redirect_uri
+ * måste vara exakt den som är godkänd för appen — adressen hit, utan fragment. */
+function loggaIn() {
+  var hit = location.origin + location.pathname;
+  var url = AGOL.portal + "/sharing/rest/oauth2/authorize" +
+    "?client_id=" + encodeURIComponent(AGOL.clientId) +
+    "&response_type=token&expiration=120" +
+    "&redirect_uri=" + encodeURIComponent(hit);
+  location.href = url;
+}
+
+/* Portalen lämnar tillbaka token i adressfragmentet (#access_token=…). Den
+ * sparas och fragmentet städas bort, så att token inte ligger kvar i adressen. */
+function lasTokenUrAdress() {
+  var h = location.hash;
+  if (!h || h.indexOf("access_token") < 0) return false;
+  var p = new URLSearchParams(h.replace("#", "?"));
+  var t = p.get("access_token");
+  if (!t) return false;
+  sparaToken(t, p.get("expires_in"));
+  try { history.replaceState(null, "", location.pathname + location.search); } catch (e) { location.hash = ""; }
+  return true;
+}
+
+/* Ett lager, en sida i taget. ArcGIS kapar svaret vid maxRecordCount och säger
+ * till med exceededTransferLimit; då hämtas nästa sida med resultOffset. */
+function agolFraga(nyckel, t) {
+  var L = AGOL.lager[nyckel];
+  var ut = [], start = 0;
+  function sida() {
+    var url = L.url + "/query?where=1%3D1&outFields=*&returnGeometry=true&outSR=3006&f=json" +
+      "&resultOffset=" + start + "&token=" + encodeURIComponent(t);
+    return fetch(url, { cache: "no-store" }).then(function (r) { return r.json(); }).then(function (d) {
+      if (d.error) {
+        var fel = new Error(d.error.message || ("ArcGIS svarade " + d.error.code));
+        fel.agol = d.error.code;                      // 498/499 = token ogiltig eller utgången
+        throw fel;
+      }
+      (d.features || []).forEach(function (f) {
+        var a = f.attributes || {}, g = f.geometry || {};
+        ut.push({
+          id: a[L.idFalt], namn: a[L.namnFalt] === undefined || a[L.namnFalt] === null ? null : String(a[L.namnFalt]),
+          klass: L.klassFalt && a[L.klassFalt] !== undefined && a[L.klassFalt] !== null ? String(a[L.klassFalt]) : null,
+          ringar: g.rings || []
+        });
+      });
+      if (d.exceededTransferLimit && (d.features || []).length) {
+        start += d.features.length;
+        return sida();
+      }
+      return ut;
+    });
+  }
+  return sida();
+}
+
+function sattText(id, text) { document.getElementById(id).textContent = text; }
+
+function uppdateraAgolStatus(text, klass) {
+  var el = document.getElementById("agolStatus");
+  el.className = "hjalp " + (klass || "");
+  el.textContent = text;
+}
+
+function visaInloggning() {
+  var t = token();
+  if (t) uppdateraAgolStatus("inloggad", "ok");
+  else uppdateraAgolStatus("inte inloggad", "");
+  document.getElementById("agolLoggaIn").textContent = t ? "Logga in igen" : "Logga in";
+}
+
+/* Hämta alla tre lagren. Ett lager i taget, så att ett fel i ett lager inte
+ * kastar bort de andra. */
+function hamtaGrund() {
+  var t = token();
+  if (!t) {
+    document.getElementById("grundHjalp").textContent =
+      "Ingen inloggning: tryck på Logga in. Grunddatan ligger i Tyréns portal och är inte publik.";
+    return;
+  }
+  document.getElementById("hamtaGrund").disabled = true;
+  document.getElementById("grundHjalp").textContent = "Hämtar grunddatan…";
+  var kvar = ["lu", "natur", "ritade"], fel = [];
+  function klart() {
+    document.getElementById("hamtaGrund").disabled = false;
+    grund.fel = fel.length ? fel.join("; ") : null;
+    grund.hamtad = new Date();
+    visaGrundStatus();
+    rita();                       // ritningen och kontrollen räknas om
+  }
+  kvar.slice().forEach(function (k) {
+    agolFraga(k, t).then(function (rader) {
+      grund[k] = rader;
+      updateraStat(k, rader.length);
+    }).catch(function (e) {
+      if (e.agol === 498 || e.agol === 499) { glomToken(); visaInloggning(); }
+      fel.push(AGOL.lager[k].namn + ": " + e.message);
+      grund[k] = [];
+    }).then(function () {
+      kvar = kvar.filter(function (x) { return x !== k; });
+      if (!kvar.length) klart();
+    });
+  });
+}
+
+function updateraStat(k, antal) {
+  var id = { lu: "statLU", natur: "statNatur", ritade: "statRitade" }[k];
+  sattText(id, antal + " objekt");
+}
+
+function visaGrundStatus() {
+  if (grund.lu.length) sattText("statLU", grund.lu.length + " objekt");
+  if (grund.natur.length) {
+    var antal = {};
+    grund.natur.forEach(function (o) { antal[o.klass] = (antal[o.klass] || 0) + 1; });
+    var delar = Object.keys(antal).sort().map(function (k) { return antal[k] + " i klass " + k; });
+    sattText("statNatur", delar.join(", "));
+    var n34 = grund.natur.filter(function (o) { return o.klass === "3" || o.klass === "4"; }).length;
+    sattText("statNatur34", n34 + " objekt");
+  }
+  if (grund.ritade.length) sattText("statRitade", grund.ritade.length + " objekt");
+  var text = [];
+  if (grund.hamtad) {
+    text.push("hämtat " + grund.hamtad.toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" }));
+  }
+  if (grund.fel) text.push("fel: " + grund.fel);
+  if (text.length) document.getElementById("grundHjalp").textContent = text.join(" · ");
+}
+
+/* Ett objekt läggs i kartan som sina polygoner: en yttre ring med sina hål.
+ * Ringarna kommer från Esri och grupperas av Geom.esriTillPolygoner (yttre ring
+ * medurs, hål moturs) — ritade man varje ring för sig blev hålen fyllda. */
+function laggPolygon(ringar, stil, tooltip) {
+  var polygoner = Geom.esriTillPolygoner(ringar);
+  if (!polygoner.length) return 0;
+  polygoner.forEach(function (poly) {
+    L.polygon(poly.map(function (r) { return tillLatLngLista(ringTillPunkter(r)); }), stil)
+      .addTo(lager.grund).bindTooltip(tooltip, { sticky: true });
+  });
+  return polygoner.length;
+}
+
+/* Lagret i kartan. Naturvärden ritas efter klass, LU och de redan ritade
+ * korridorerna i sina egna färger. Objekt som korridoren snittar får en
+ * tjockare kant, så att man ser vilka som är berörda. */
+function ritaGrund() {
+  lager.grund.clearLayers();
+  if (state.visaGrund.lu) {
+    grund.lu.forEach(function (o) {
+      laggPolygon(o.ringar, { pane: "grundYta", color: "#c9a227", weight: 1.4, opacity: .8,
+        fillColor: "#c9a227", fillOpacity: .06 },
+        "LU-korridoren" + (o.namn ? ": " + o.namn : "") +
+        " — korridoren måste hålla sig inom den här");
+    });
+  }
+  if (state.visaGrund.natur) {
+    var berord = berordaNaturObjekt();       // vilka objekt korridoren snittar, en gång
+    grund.natur.forEach(function (o) { ritaNaturObjekt(o, berord); });
+  }
+  if (state.visaGrund.ritade) {
+    grund.ritade.forEach(function (o) {
+      laggPolygon(o.ringar, { pane: "grundYta", color: "#9d7bff", weight: 1.6, dashArray: "7 5",
+        opacity: .85, fillColor: "#9d7bff", fillOpacity: .07 },
+        "Redan ritad korridor" + (o.namn ? ": " + o.namn : ""));
+    });
+  }
+  ritaGrundKontroll();
+}
+
+function ritaNaturObjekt(o, berord) {
+  var visa34 = document.getElementById("visaNatur34").checked;
+  if (!visa34 && (o.klass === "3" || o.klass === "4")) return;
+  var f = naturFarg[o.klass] || "#b9b9b9";
+  var traffad = !!(berord && berord[String(o.id)]);
+  laggPolygon(o.ringar, { pane: "grundYta", color: f, weight: traffad ? 3 : 1.4,
+    opacity: traffad ? .95 : .7, fillColor: f,
+    fillOpacity: o.klass === "1" ? .22 : .12 },
+    "Naturvärde klass " + (o.klass || "?") + (o.namn && String(o.namn).trim() ? " · " + String(o.namn).trim() : " · #" + o.id) +
+    (traffad ? " · i korridoren: " + talArea(berord[String(o.id)]) : ""));
+}
+
+/* Objekten som korridoren snittar, ur senaste kontrollen. */
+function berordaNaturObjekt() {
+  var ut = null;
+  if (!grund.kontroll || !grund.kontroll.natur) return ut;
+  ut = {};
+  grund.kontroll.natur.perKlass.forEach(function (c) {
+    c.objekt.forEach(function (o) { ut[String(o.id)] = o.area; });
+  });
+  return ut;
+}
+
+/* Esri-ring till punkter med e/n (SWEREF 99 TM). Ringen är [e, n]-par. */
+function ringTillPunkter(ring) {
+  return ring.map(function (p) { return { e: p[0], n: p[1], x: p[0], y: p[1] }; });
+}
+
+/* Kontrollen räknas om när korridoren ändras, men inte mitt i ett drag: den tar
+ * några tiondels sekunder på de riktiga lagren. */
+var grundTimer = null;
+function planeraGrundKontroll() {
+  if (grundTimer) clearTimeout(grundTimer);
+  if (!harGrund() || !korridoren || !korridoren.ring) {
+    grund.kontroll = null;
+    ritaGrundKontroll();
+    return;
+  }
+  grundTimer = setTimeout(function () {
+    grundTimer = null;
+    raknaGrundKontroll();
+  }, 150);
+}
+
+function harGrund() { return grund.lu.length || grund.natur.length || grund.ritade.length; }
+
+function raknaGrundKontroll() {
+  if (!korridoren || !korridoren.ring || !harGrund()) { grund.kontroll = null; ritaGrundKontroll(); return; }
+  grund.kontroll = Geom.grundkontroll(korridoren.ring,
+    { lu: grund.lu, natur: grund.natur, ritade: grund.ritade });
+  ritaGrund();
+  // Varningslistan byggs i ritaTabeller och läser grund.kontroll — den måste
+  // ritas om efter kontrollen, annars visar den föregående korridors varningar.
+  ritaTabeller();
+}
+
+/* Objektens "Objektid" är ofta en tom sträng i lagret — FID är då det som går
+ * att känna igen objektet på. */
+function objektNamn(o) {
+  var n = (o.namn === null || o.namn === undefined ? "" : String(o.namn)).trim();
+  return n || ("#" + o.id);
+}
+
+function talArea(m2) {
+  if (m2 === null || m2 === undefined) return "–";
+  if (m2 < 10000) return tal(m2, 0) + " m²";
+  return tal(m2 / 10000, 1) + " ha";
+}
+
+function ritaGrundKontroll() {
+  var el = document.getElementById("grundKontroll");
+  el.innerHTML = "";
+  function rad(etikett, varde, klass) {
+    var d = document.createElement("div");
+    d.className = "r " + (klass || "");
+    d.innerHTML = "<span>" + etikett + "</span><b>" + varde + "</b>";
+    el.appendChild(d);
+  }
+  if (!harGrund()) {
+    el.innerHTML = '<div class="hjalp">Grunddatan är inte hämtad — kontrollen räknas mot den när den är hämtad.</div>';
+    return;
+  }
+  var k = grund.kontroll;
+  if (!k) {
+    el.innerHTML = '<div class="hjalp">Ingen sluten korridor än — kontrollen räknas när korridoren är sluten.</div>';
+    return;
+  }
+  if (k.fel) { rad("Kontrollen", "kunde inte räknas: " + k.fel, "fel"); return; }
+
+  // Inom LU-korridoren?
+  if (k.lu && k.lu.antal_polygoner) {
+    var u = k.lu.area_utanfor;
+    var andel = k.lu.andel_utanfor;
+    if (u === null) rad("Inom LU", "kunde inte räknas", "fel");
+    else if (u < 0.5) rad("Inom LU-korridoren", "ja, helt och hållet", "ok");
+    else {
+      var var_ = k.lu.punkt_utanfor;
+      rad("Utanför LU", talArea(u) + " (" + tal(andel * 100, 1) + " % av korridoren)",
+        andel > 0.2 ? "fel" : "varn");
+      if (var_) rad("Utanför LU vid", "E " + Math.round(var_.e) + " N " + Math.round(var_.n));
+    }
+  }
+
+  // Naturvärden, klass för klass.
+  (k.natur ? k.natur.perKlass : []).forEach(function (c) {
+    var klass = c.klass === "1" ? "fel" : (c.klass === "2" ? "varn" : "");
+    if (!c.antal_objekt) {
+      rad("Naturvärde " + c.klass, "inga objekt i korridoren", "ok");
+      return;
+    }
+    var lista = c.objekt.slice(0, 4).map(function (o) {
+      return objektNamn(o) + " (" + talArea(o.area) + ")";
+    }).join(", ");
+    var mer = c.objekt.length > 4 ? ", +" + (c.objekt.length - 4) + " till" : "";
+    rad("Naturvärde " + c.klass, talArea(c.area) + " i " + c.antal_objekt + " objekt", klass);
+    var dl = document.createElement("div");
+    dl.className = "lista";
+    dl.textContent = lista + mer;
+    el.appendChild(dl);
+  });
+
+  // Redan ritade korridorer.
+  if (k.ritade && k.ritade.area !== null && k.ritade.area > 0.5) {
+    var namn = k.ritade.perObjekt.map(function (o) { return o.namn || ("#" + o.id); });
+    rad("Sammanfaller med redan ritade", talArea(k.ritade.area) +
+      " (" + tal(k.ritade.andel_av_korridoren * 100, 1) + " %): " + namn.join(", "));
+  }
+  rad("Korridorens area", talArea(k.korridorens_area));
+}
+
+/* Varningar ur grunddatan: det som ska synas i varningslistan, inte bara i
+ * kontrollrutan. Klass 3–4 ger ingen varning — de är med i siffrorna ändå. */
+function grundVarningar() {
+  var ut = [];
+  var k = grund.kontroll;
+  if (!k || k.fel) return ut;
+  if (k.lu && k.lu.antal_polygoner && k.lu.area_utanfor !== null && k.lu.area_utanfor > 0.5) {
+    var p = k.lu.punkt_utanfor;
+    ut.push("Korridoren ligger " + talArea(k.lu.area_utanfor) + " (" +
+      tal(k.lu.andel_utanfor * 100, 1) + " %) utanför LU-korridoren" +
+      (p ? ", bl.a. vid E " + Math.round(p.e) + " N " + Math.round(p.n) : "") +
+      " — uppdraget är bundet till lokaliseringsutredningens korridor.");
+  }
+  (k.natur ? k.natur.perKlass : []).forEach(function (c) {
+    if (!c.antal_objekt) return;
+    if (c.klass === "1" || c.klass === "2") {
+      ut.push("Korridoren berör naturvärde " + c.klass + ": " + talArea(c.area) +
+        " i " + c.antal_objekt + " objekt.");
+    }
+  });
+  return ut;
+}
+
+/* Ett uttag av lagren att pröva med, utan inloggning: ?grund=<fil> läser en fil
+ * med { lu, natur, ritade } i samma form som agolFraga ger. Uttaget ligger
+ * utanför repot — grunddatan är inte publik. */
+function laddaGrundFranFil() {
+  var p = new URLSearchParams(location.search);
+  var fil = p.get("grund");
+  if (!fil) return;
+  document.getElementById("grundHjalp").textContent = "läser " + fil + "…";
+  fetch(fil, { cache: "no-store" }).then(function (r) {
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r.json();
+  }).then(function (d) {
+    grund.lu = d.lu || [];
+    grund.natur = d.natur || [];
+    grund.ritade = d.ritade || [];
+    grund.hamtad = new Date();
+    grund.fel = null;
+    visaGrundStatus();
+    document.getElementById("grundHjalp").textContent = "provkört ur " + fil + ": " +
+      grund.lu.length + " LU, " + grund.natur.length + " naturvärden, " +
+      grund.ritade.length + " redan ritade — ingen inloggning behövs.";
+    ritaGrund();
+    rita();
+  }).catch(function (e) {
+    document.getElementById("grundHjalp").textContent = "kunde inte läsa " + fil + ": " + e.message;
+  });
+}
+
 /* --- händelser --- */
 karta.on("click", function (e) {
   if (state.lage !== "rita") return;
@@ -1101,11 +1547,26 @@ document.getElementById("visaHornlinje").onchange = function () {
 document.getElementById("expGeoJson").onclick = exporteraGeoJson;
 document.getElementById("expCsv").onclick = exporteraCsv;
 
+/* grunddatan */
+document.getElementById("agolLoggaIn").onclick = loggaIn;
+document.getElementById("hamtaGrund").onclick = hamtaGrund;
+["visaLU", "visaNatur", "visaRitade"].forEach(function (id) {
+  document.getElementById(id).onchange = function () {
+    state.visaGrund[id === "visaLU" ? "lu" : (id === "visaNatur" ? "natur" : "ritade")] = this.checked;
+    ritaGrund();
+  };
+});
+document.getElementById("visaNatur34").onchange = ritaGrund;
+
 /* --- start --- */
 state.noder = state.sidor.vanster.noder;      // aliasen pekar på vänstersidan
 state.aktiva = state.sidor.vanster.aktiva;
+lasTokenUrAdress();                          // token från inloggningen, om vi kom tillbaka
+visaInloggning();
 sattLage("rita");
 rita();
+ritaGrundKontroll();
+laddaGrundFranFil();                         // ?grund=<fil> — ett uttag att pröva med
 if (window.__bygginfo) {
   visaByggstämpel(window.__bygginfo);
 } else {
@@ -1137,7 +1598,16 @@ window.__app = {
   nodmarken: function () { return nodmarken; },
   nodmarkenH: function () { return nodmarkenH; },
   /* lägg en nod i en bestämd sida — probehjälp */
-  laggTillNodISida: function (namn, latlng) { sattSida(namn); laggTillNod(latlng); }
+  laggTillNodISida: function (namn, latlng) { sattSida(namn); laggTillNod(latlng); },
+  /* grunddatan */
+  grund: grund, AGOL: AGOL, hamtaGrund: hamtaGrund, ritaGrund: ritaGrund,
+  ritaGrundKontroll: ritaGrundKontroll, raknaGrundKontroll: raknaGrundKontroll,
+  grundVarningar: grundVarningar, planeraGrundKontroll: planeraGrundKontroll,
+  laddaGrundFranFil: laddaGrundFranFil, loggaIn: loggaIn,
+  lasTokenUrAdress: lasTokenUrAdress, visaInloggning: visaInloggning,
+  /* sätt en token direkt (probehjälp — token skrivs aldrig ut) */
+  sparaToken: sparaToken, glomToken: glomToken,
+  harToken: function () { return !!token(); }
 };
 </script>
 </body>

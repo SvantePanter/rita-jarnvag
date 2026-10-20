@@ -662,6 +662,264 @@
     return { punkter: ut, varningar: varningar, fel: null };
   }
 
+  /* ---------- grunddata: Esri-ringar, snitt och differens ----------
+   *
+   * Grunddatan kommer ur ArcGIS Online och frågas i SWEREF 99 TM (outSR=3006),
+   * alltså samma plan som korridoren räknas i. Snitt och differens görs av
+   * polygon-clipping (MIT), som ligger i vendor/ och laddas som
+   * window.polygonClipping i webbläsaren och med require i node. Resultaten
+   * prövas mot shapely i prov/ — två oberoende räkningar av samma sak.
+   */
+
+  function klipparen() {
+    if (typeof polygonClipping !== "undefined") return polygonClipping;
+    if (typeof require === "function") {
+      try { return require("./vendor/polygon-clipping.js"); } catch (e) { return null; }
+    }
+    return null;
+  }
+
+  function sluten(ring) {
+    if (!ring.length) return ring;
+    var forsta = ring[0], sista = ring[ring.length - 1];
+    if (forsta[0] === sista[0] && forsta[1] === sista[1]) return ring;
+    return ring.concat([[forsta[0], forsta[1]]]);
+  }
+
+  /* Skolax för en ring av [x, y]-par. Klipparens geometri är talpar, inte våra
+   * punkter med x/y/e/n, så ringArea passar inte här (den läser p.x och p.y och
+   * ger NaN på ett talpar — det felet gjorde hela kontrollen tyst tom). */
+  function skolax(ring) {
+    var a = 0;
+    for (var i = 0; i < ring.length; i++) {
+      var p = ring[i], q = ring[(i + 1) % ring.length];
+      a += p[0] * q[1] - q[0] * p[1];
+    }
+    return a / 2;
+  }
+
+  /* Esri-ringar till polygon-clippings form: [[yttre, hål…], …].
+   * Esri:s yttre ring är medurs och hålen moturs (OGC gör tvärtom), och hålen
+   * följer sin yttre ring i listan. Tecknet på skolaxen är därför beskedet. */
+  function esriTillPolygoner(ringar) {
+    var ut = [], nu = null;
+    (ringar || []).forEach(function (r) {
+      if (!r || r.length < 4) return;
+      if (skolax(r) < 0) { nu = [sluten(r)]; ut.push(nu); }
+      else if (nu) nu.push(sluten(r));
+    });
+    if (!ut.length) {
+      // Ingen ring är medurs — datat följer i så fall OGC. Tag dem som de är.
+      (ringar || []).forEach(function (r) { if (r && r.length >= 4) ut.push([sluten(r)]); });
+    }
+    return ut;
+  }
+
+  /* Våra egna punkter (med e/n i SWEREF) till klipparens form. */
+  function punkterTillPolygon(punkter) {
+    if (!punkter || punkter.length < 3) return [];
+    var ring = punkter.map(function (p) { return [p.e !== undefined ? p.e : p.x, p.n !== undefined ? p.n : p.y]; });
+    return [sluten(ring)];
+  }
+
+  function polygonArea(polygoner) {
+    var sum = 0;
+    (polygoner || []).forEach(function (p) {
+      p.forEach(function (r, i) { sum += (i === 0 ? 1 : -1) * Math.abs(skolax(r)); });
+    });
+    return sum;
+  }
+
+  /* Punkt i ring: udda/ämna-strålen. Används för att veta var ett utanför-
+   * stycke ligger, inte för area. */
+  function punktIRing(x, y, ring) {
+    var inne = false;
+    for (var i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      var xi = ring[i][0], yi = ring[i][1], xj = ring[j][0], yj = ring[j][1];
+      if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) inne = !inne;
+    }
+    return inne;
+  }
+
+  /* En punkt som ligger i det största stycket — "var" i beskeden. */
+  function representativPunkt(polygoner) {
+    if (!polygoner || !polygoner.length) return null;
+    var storst = null, storstArea = -1;
+    polygoner.forEach(function (p) {
+      if (!p.length) return;
+      var a = Math.abs(skolax(p[0]));
+      if (a > storstArea) { storstArea = a; storst = p[0]; }
+    });
+    if (!storst || storst.length < 4) return null;
+    // areans tyngdpunkt är rätt svar för en konvex ring; för en krokig ring
+    // prövas den mot ringen och får annars ge plats för en nodpunkt.
+    var a2 = 0, cx = 0, cy = 0;
+    for (var i = 0; i < storst.length - 1; i++) {
+      var k = storst[i][0] * storst[i + 1][1] - storst[i + 1][0] * storst[i][1];
+      a2 += k; cx += (storst[i][0] + storst[i + 1][0]) * k; cy += (storst[i][1] + storst[i + 1][1]) * k;
+    }
+    if (Math.abs(a2) > 1e-9) {
+      cx /= 3 * a2; cy /= 3 * a2;
+      if (punktIRing(cx, cy, storst)) return P(cx, cy);
+    }
+    return P(storst[0][0], storst[0][1]);
+  }
+
+  function ringarsBox(polygoner) {
+    var b = { xmin: Infinity, ymin: Infinity, xmax: -Infinity, ymax: -Infinity };
+    (polygoner || []).forEach(function (p) {
+      p.forEach(function (r) {
+        r.forEach(function (pt) {
+          if (pt[0] < b.xmin) b.xmin = pt[0];
+          if (pt[0] > b.xmax) b.xmax = pt[0];
+          if (pt[1] < b.ymin) b.ymin = pt[1];
+          if (pt[1] > b.ymax) b.ymax = pt[1];
+        });
+      });
+    });
+    return b;
+  }
+
+  function boxMots(b1, b2) {
+    return !(b1.xmax < b2.xmin || b2.xmax < b1.xmin || b1.ymax < b2.ymin || b2.ymax < b1.ymin);
+  }
+
+  function klipp(operation, a, b) {
+    var pc = klipparen();
+    if (!pc) return { polygoner: null, fel: "polygon-clipping saknas (vendor/polygon-clipping.js)" };
+    if (!a || !a.length) return { polygoner: [], fel: null };
+    try {
+      // Union tar en mängd och förenar den med sig själv — det behövs för att
+      // objekt som ligger ovanpå varandra bara ska räknas en gång.
+      if (operation === "union") return { polygoner: pc.union(a) || [], fel: null };
+      // Tom mängd är inte samma sak för de två andra operationerna: A \ ∅ är A,
+      // men A ∩ ∅ är ∅. Att svara ∅ på båda gjorde en korridor helt utanför LU
+      // till "helt inom" — det såg ut som ett godkänt svar.
+      if (!b || !b.length) {
+        return { polygoner: operation === "difference" ? a : [], fel: null };
+      }
+      var s = pc[operation](a, b);
+      return { polygoner: s || [], fel: null };
+    } catch (e) {
+      return { polygoner: null, fel: "kunde inte räkna " + operation + " (" + (e && e.message) + ")" };
+    }
+  }
+
+  /* Överlapp mellan korridoren och en uppsättning objekt. Allt är
+   * multipolygoner: [polygon, …] där en polygon är [yttre ring, hål…].
+   *
+   * Två summor lämnas, och de betyder olika saker:
+   *   summa   — per objekt, summan av varje objekts snitt med korridoren
+   *   area    — klassens yta inuti korridoren, räknad på objektens *union*
+   * Objekt av samma klass kan ligga ovanpå varandra (gjorde det i det riktiga
+   * datat), och då är summan större än ytan. Ytan är det som ska rapporteras
+   * som "så mycket berörs"; summan är till för att se vilka objekt som bidrar.
+   *
+   * objekt = [{ id, namn, klass, ringar (Esri) }]. */
+  function overlappMotObjekt(korridorMulti, objekt, korridorBox) {
+    var perObjekt = [], summa = 0, fel = [], nara = [];
+    (objekt || []).forEach(function (o) {
+      var poly = esriTillPolygoner(o.ringar);
+      if (!poly.length) return;
+      if (korridorBox && !boxMots(korridorBox, ringarsBox(poly))) return;   // utanför: inget snitt
+      nara = nara.concat(poly);
+      var r = klipp("intersection", korridorMulti, poly);
+      if (r.fel) { fel.push(o.namn || o.id || "?"); return; }
+      var a = polygonArea(r.polygoner);
+      if (a > 0.5) {                                               // under en halv m² är inget
+        perObjekt.push({ id: o.id === undefined ? null : o.id, namn: o.namn || null, klass: o.klass || null,
+          area: a, andel_av_objektet: Math.abs(skolax(poly[0][0])) > 0 ? a / polygonArea(poly) : null });
+        summa += a;
+      }
+    });
+    // Ytan: objektens union först, snittet sedan. Utan unionen räknas en
+    // överlappande dubbelt.
+    var area = null;
+    if (nara.length) {
+      var u = klipp("union", nara, []);
+      if (u.fel) fel.push("union");
+      var s = klipp("intersection", korridorMulti, u.polygoner || nara);
+      if (s.fel) fel.push("snitt"); else area = polygonArea(s.polygoner);
+    } else {
+      area = 0;
+    }
+    return { perObjekt: perObjekt, summa: summa, area: area, fel: fel };
+  }
+
+  /* Hela grunddatakontrollen för en sluten korridor.
+   * grund = { lu: [{namn, ringar}], natur: [{id, namn, klass, ringar}], ritade: [...] }
+   * → { fel, korridorens_area, lu: {...}, natur: {...}, ritade: {...} } */
+  function grundkontroll(korridorRing, grund, alternativ) {
+    var ut = { fel: null, korridorens_area: null, lu: null, natur: null, ritade: null };
+    // En polygon är [ring, hål…], en multipolygon är [polygon, …]. Klipparen och
+    // area-räkningen tar multipolygoner, så korridoren paketeras så.
+    var korridorMulti = [punkterTillPolygon(korridorRing)];
+    if (!korridorMulti[0].length) { ut.fel = "Korridoren behöver minst tre punkter."; return ut; }
+    if (!klipparen()) { ut.fel = "polygon-clipping saknas (vendor/polygon-clipping.js)"; return ut; }
+    ut.korridorens_area = polygonArea(korridorMulti);
+    var korridorBox = ringarsBox(korridorMulti);
+
+    // 1. Inom LU-korridoren?
+    if (grund && grund.lu && grund.lu.length) {
+      var luAlla = [], luNara = [];
+      grund.lu.forEach(function (o) {
+        var poly = esriTillPolygoner(o.ringar);
+        luAlla = luAlla.concat(poly);
+        if (!korridorBox || boxMots(korridorBox, ringarsBox(poly))) luNara = luNara.concat(poly);
+      });
+      var luForening = klipp("union", luNara, []);
+      var utanfor = klipp("difference", korridorMulti, luForening.polygoner || luNara);
+      var inom = klipp("intersection", korridorMulti, luForening.polygoner || luNara);
+      ut.lu = {
+        antal_polygoner: grund.lu.length,
+        antal_nara: luNara.length,
+        lu_area: polygonArea(luAlla),
+        lu_area_union: (function () {
+          var u = klipp("union", luAlla, []);
+          return u.fel ? null : polygonArea(u.polygoner);
+        })(),
+        area_utanfor: utanfor.fel ? null : polygonArea(utanfor.polygoner),
+        area_inom: inom.fel ? null : polygonArea(inom.polygoner),
+        punkt_utanfor: utanfor.fel ? null : representativPunkt(utanfor.polygoner),
+        fel: utanfor.fel || inom.fel || null
+      };
+      if (ut.lu.area_utanfor !== null) {
+        ut.lu.andel_utanfor = ut.korridorens_area > 0 ? ut.lu.area_utanfor / ut.korridorens_area : null;
+      }
+    }
+
+    // 2. Berörda naturvärdesobjekt, klass för klass
+    if (grund && grund.natur && grund.natur.length) {
+      var klasser = {}, summa = 0, summaObjekt = 0, fel = [];
+      grund.natur.forEach(function (o) {
+        var k = o.klass === undefined || o.klass === null ? "?" : String(o.klass);
+        if (!klasser[k]) klasser[k] = { klass: k, objekt: [], summa: 0, fel: [] };
+        klasser[k].objekt.push(o);
+      });
+      var perKlass = Object.keys(klasser).sort().map(function (k) {
+        var o = klasser[k];
+        var r = overlappMotObjekt(korridorMulti, o.objekt, korridorBox);
+        r.fel.forEach(function (n) { fel.push(n); });
+        summa += (r.area || 0);
+        summaObjekt += r.summa;
+        return { klass: k, area: r.area, area_summa_objekt: r.summa,
+          andel_av_korridoren: r.area === null || !(ut.korridorens_area > 0) ? null : r.area / ut.korridorens_area,
+          antal_objekt: r.perObjekt.length, objekt: r.perObjekt };
+      });
+      ut.natur = { antal_objekt: grund.natur.length, area: summa, area_summa_objekt: summaObjekt,
+        perKlass: perKlass, fel: fel };
+    }
+
+    // 3. Redan ritade korridorer
+    if (grund && grund.ritade && grund.ritade.length) {
+      var rr = overlappMotObjekt(korridorMulti, grund.ritade, korridorBox);
+      ut.ritade = { antal_objekt: grund.ritade.length, area: rr.area,
+        area_summa_objekt: rr.summa, perObjekt: rr.perObjekt, fel: rr.fel,
+        andel_av_korridoren: rr.area === null || !(ut.korridorens_area > 0) ? null : rr.area / ut.korridorens_area };
+    }
+    return ut;
+  }
+
   return {
     tillSweref: tillSweref,
     tillWgs84: tillWgs84,
@@ -684,6 +942,15 @@
     slutningsvinkel: slutningsvinkel,
     korridor: korridor,
     forskjut: forskjut,
+    esriTillPolygoner: esriTillPolygoner,
+    punkterTillPolygon: punkterTillPolygon,
+    polygonArea: polygonArea,
+    punktIRing: punktIRing,
+    representativPunkt: representativPunkt,
+    ringarsBox: ringarsBox,
+    boxMots: boxMots,
+    overlappMotObjekt: overlappMotObjekt,
+    grundkontroll: grundkontroll,
     GRS80: { a: A, f: F, e2: E2 },
     SWEREF99TM: { k0: K0, lon0: LON0, falseEasting: FE, falseNorthing: FN }
   };

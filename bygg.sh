@@ -15,6 +15,7 @@ tid=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 rm -rf _site
 mkdir -p _site
 cp index.html geom.js _site/
+cp -r vendor _site/
 
 cat > _site/helsa.json <<SLUT
 {"status":"ok","tjanst":"rita-jarnvag","version":"$version","commit":"$commit","commit_kort":"$kort","byggd":"$tid"}

@@ -5,3 +5,5 @@ prov/_ut.json
 prov/_punkter.json
 __pycache__/
 .pytest_cache/
+# uttag av de riktiga lagren (inte publik grunddata)
+grund_uttag.json

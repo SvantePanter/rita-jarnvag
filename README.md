@@ -9,6 +9,12 @@ att en järnväg ska rymmas i den.
 Ryms inte radien blir den mindre, hörnet flaggas med **!**, och beskedet säger
 vilket segment som är för kort.
 
+Mot **grunddata** från ArcGIS Online kontrolleras korridoren: ligger den inom
+lokaliseringsutredningens korridor, hur mycket naturvärde av varje klass den
+berör, och hur mycket den sammanfaller med korridorer vi redan ritat.
+Grunddatan kräver inloggning och hämtas i SWEREF 99 TM — se
+[Grunddata](#grunddata-arcgis-online).
+
 Kartan är Leaflet med OpenStreetMap. Ingen backend, ingen byggkedja: en
 HTML-fil, en geometrimodul, och en statisk sajt på Render.
 
@@ -104,6 +110,73 @@ JSON. `prov/test_korridor.py` räknar om samma sak med **shapely**: arean, att
 ringen är en giltig och moturs polygon, och varje breddmätning som
 `LineString.distance` mot andra sidan. JS och shapely är alltså två oberoende
 räkningar av samma sak, på samma sätt som projektionen prövas mot pyproj.
+
+## Grunddata (ArcGIS Online)
+
+Grunddatan ligger i Tyréns portal och **kräver inloggning**. Tre lager används:
+
+- **LU-korridoren** (`jvf_boy_korridor`) — den korridor uppdraget måste hålla sig
+  inom.
+- **Naturvärdespolygoner** (`lvf_miljo_lokaliseringsutredningen`, klass 1–4).
+- **Redan ritade korridorer** (`lvf_boy_korridorer`).
+
+Inloggningen är **OAuth implicit** mot portalen: appen skickar dig till
+ArcGIS Online och får tillbaka en token i adressfragmentet, som sparas i
+`localStorage` med sin giltighetstid och städas bort ur adressen. Ingen server
+behövs och ingen hemlighet ligger i klienten — token är din egen och kortlivad.
+`redirect_uri` är sidans egen adress (`https://rita-jarnvag.onrender.com/`) och
+måste vara godkänd för appen i portalen.
+
+Geometrin frågas i **SWEREF 99 TM** (`outSR=3006`), alltså samma plan som
+korridoren räknas och mäts i. Att i stället läsa lagrets eget koordinatsystem
+(SWEREF 99 12 00, EPSG:3007) och tro att det är 3006 hade lagt korridoren 171 km
+fel. Att AGOL:s 3006 stämmer med vår egen uträkning är prövat mot pyproj
+(0,1 mm).
+
+### Vad kontrollen räknar
+
+När korridoren är sluten räknas den mot grunddatan (`geom.js`):
+
+- **Inom LU**: hur stor del av korridoren som ligger utanför, i m² och procent,
+  och en punkt att titta på. Helt innanför = grönt; över 20 % utanför = rött.
+- **Naturvärde per klass**: hur mycket av korridoren som ligger i naturvärde av
+  varje klass, hur många objekt det gäller och vilka de är. Klass 1 och 2 ger
+  dessutom en varning i varningslistan.
+- **Redan ritade korridorer**: hur mycket som sammanfaller, och vilka.
+
+Klassens yta räknas på objektens **union**, inte som summan av varje objekts
+snitt: två objekt i samma klass kan ligga ovanpå varandra, och då blir summan
+större än ytan. Båda talen finns kvar i resultatet (`area` och
+`area_summa_objekt`) — det är de två olika sakerna, och den som rapporteras som
+"berörs" är ytan.
+
+Snitt och differens görs med **polygon-clipping**, som ligger i `vendor/`
+(version 0.15.7, MIT, orörd kopia från unpkg). Den behövs för att enkelt kunna
+räkna area på överlapp och hål — och den prövas mot shapely, se nedan.
+
+### Så prövas det
+
+`prov/prov_grund.mjs` kör kontrollen i node (påhittade fall, plus ett uttag av de
+riktiga lagren om filen finns) och skriver siffrorna som JSON.
+`prov/test_grund.py` räknar om samma sak med shapely — inklusive vilka ringar
+som är hål (efter ringdjup, inte efter tecken, så att inte samma antagande prövas
+som koden gör) och varje objekts eget snitt.
+
+```sh
+node prov/prov_grund.mjs                                  # påhittade fall
+node prov/prov_grund.mjs --skarp /opt/data/grund_uttag.json   # riktiga lagren
+env -u PYTHONPATH PYTHONPATH= /opt/data/gkw-venv/bin/python -m pytest -q prov/
+```
+
+Ett uttag av de riktiga lagren ligger **utanför repot** — grunddatan är inte
+publik och publiceras inte av appen. Uttaget görs med `arcgis.py token` mot
+lagren med `outSR=3006`.
+
+### Att pröva utan inloggning
+
+`?grund=<fil>` läser ett lokalt uttag i samma form som AGOL-svaret
+(`{ lu, natur, ritade }`). Bra för att se ritningen och kontrollen med riktig
+geometri utan inloggning. Filen är gitignorerad.
 
 ## Att köra
 
