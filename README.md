@@ -79,10 +79,14 @@ python3 prov/visa_siffror.py                             # läsbara siffror
 
 ## Drift
 
-Statisk sajt på Render (`rita-jarnvag.onrender.com`), byggd av `bygg.sh`, som
-stämplar version ur `VERSION` och commit ur `RENDER_GIT_COMMIT` in i både
-`helsa.json` och den serverade HTML:en. Alltså två vittnen på samma deploy.
+Statisk sajt på Render: **https://rita-jarnvag.onrender.com** (repo
+`SvantePanter/rita-jarnvag`). Byggd av `bygg.sh`, som stämplar version ur
+`VERSION` och commit ur `RENDER_GIT_COMMIT` in i både `helsa.json` och den
+serverade HTML:en. Alltså två vittnen på samma deploy: stämpeln i sidfoten och
+`/helsa.json` ska visa samma commit.
 
-Tjänsten skapades via Render-API:t (`serviceDetails.buildCommand` = `sh bygg.sh`,
-`publishPath` = `_site`). `render.yaml` finns för den som vill återskapa den som
-Blueprint.
+Tjänsten skapades via Render-API:t (`type` = `static_site`,
+`serviceDetails.buildCommand` = `sh bygg.sh`, `publishPath` = `_site`,
+`autoDeploy` = `yes` — alltså deployas varje push till `main`).
+`render.yaml` finns för den som vill återskapa den som Blueprint. Sajten är
+helt statisk och har inga hemligheter, så inga miljövariabler behövs.
